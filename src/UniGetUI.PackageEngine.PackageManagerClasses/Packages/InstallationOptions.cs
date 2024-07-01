@@ -1,10 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Runtime.InteropServices;
-using System.Text;
+﻿using System.Runtime.InteropServices;
 using System.Text.Json;
-using System.Threading.Tasks;
 using UniGetUI.Core.Data;
 using UniGetUI.Core.Language;
 using UniGetUI.Core.Logging;
@@ -19,58 +14,68 @@ namespace UniGetUI.PackageEngine.PackageClasses
     /// </summary>
     public class InstallationOptions
     {
+        private static readonly Dictionary<long, InstallationOptions?> OptionsCache = new();
+
         public bool SkipHashCheck { get; set; } = false;
         public bool InteractiveInstallation { get; set; } = false;
         public bool RunAsAdministrator { get; set; } = false;
         public string Version { get; set; } = "";
         public Architecture? Architecture { get; set; } = null;
         public PackageScope? InstallationScope { get; set; } = null;
-        public List<string> CustomParameters { get; set; } = new List<string>();
+        public List<string> CustomParameters { get; set; } = [];
         public bool RemoveDataOnUninstall { get; set; } = false;
         public bool PreRelease { get; set; } = false;
         public string CustomInstallLocation { get; set; } = "";
 
         public Package Package { get; }
 
-        private string _saveFileName = "Unknown.Unknown.InstallationOptions";
+        private readonly string __save_filename;
 
-        /// <summary>
-        /// Construct a new InstallationOptions object for a given package. The options will be 
-        /// loaded from disk unless the reset parameter is set to true, in which case the options
-        /// will be the default ones.
-        /// </summary>
-        /// <param name="package"></param>
-        /// <param name="reset"></param>
-        public InstallationOptions(Package package, bool reset = false)
+        private InstallationOptions(Package package)
         {
             Package = package;
-            _saveFileName = Package.Manager.Name.Replace(" ", "").Replace(".", "") + "." + Package.Id;
-            if (!reset)
-            {
-                LoadOptionsFromDisk();
-            }
+            __save_filename = package.Manager.Name.Replace(" ", "").Replace(".", "") + "." + package.Id;
         }
 
         /// <summary>
-        /// Returns a new InstallationOptions object from a given package. The options will be
-        /// loaded from the disk asynchronously.
+        /// Returns the InstallationOptions object associated with the given package.
         /// </summary>
-        /// <param name="package"></param>
-        /// <returns></returns>
-        public static async Task<InstallationOptions> FromPackageAsync(Package package)
+        /// <param name="package">The package from which to load the InstallationOptions</param>
+        /// <returns>The package's InstallationOptions instance</returns>
+        public static InstallationOptions FromPackage(Package package, bool? elevated = null, bool? 
+            interactive = null, bool? no_integrity = null, bool? remove_data = null)
         {
-            InstallationOptions options = new(package, reset: true);
-            await options.LoadOptionsFromDiskAsync();
-            return options;
+            InstallationOptions instance;
+            if (OptionsCache.TryGetValue(package.GetHash(), out InstallationOptions? cached_instance) && cached_instance != null)
+            {
+                instance = cached_instance;
+            }
+            else
+            {
+                Logger.Debug($"Creating new instance of InstallationOptions for package {package}, as no instance was found in cache");
+                instance = new(package);
+                instance.LoadFromDisk();
+                OptionsCache.Add(package.GetHash(), instance);
+            }
+
+            if (elevated != null) instance.RunAsAdministrator = (bool)elevated;
+            if (interactive != null) instance.InteractiveInstallation = (bool)interactive;
+            if (no_integrity != null) instance.SkipHashCheck = (bool)no_integrity;
+            if (remove_data != null) instance.RemoveDataOnUninstall = (bool)remove_data;
+
+            return instance;
         }
 
         /// <summary>
-        /// Overload of the constructor that accepts an UpgradablePackage object.
+        /// Returns the InstallationOptions object associated with the given package.
         /// </summary>
-        /// <param name="package"></param>
-        /// <param name="reset"></param>
-        public InstallationOptions(UpgradablePackage package, bool reset = false) : this((Package)package, reset)
-        { }
+        /// <param name="package">The package from which to load the InstallationOptions</param>
+        /// <returns>The package's InstallationOptions instance</returns>
+        public static async Task<InstallationOptions> FromPackageAsync(Package package, bool? elevated = null, 
+            bool? interactive = null, bool? no_integrity = null, bool? remove_data = null)
+        {
+            return await Task.Run(() => FromPackage(package, elevated, interactive, no_integrity, remove_data));
+        }
 
         /// <summary>
         /// Returns a new InstallationOptions object from a given SerializableInstallationOptions_v1 and a package.
@@ -80,16 +85,16 @@ namespace UniGetUI.PackageEngine.PackageClasses
         /// <returns></returns>
         public static InstallationOptions FromSerialized(SerializableInstallationOptions_v1 options, Package package)
         {
-            InstallationOptions opt = new(package, reset: true);
-            opt.FromSerialized(options);
-            return opt;
+            InstallationOptions instance = new(package);
+            instance.FromSerializable(options);
+            return instance;
         }
 
         /// <summary>
         /// Loads and applies the options from the given SerializableInstallationOptions_v1 object to the current object.
         /// </summary>
         /// <param name="options"></param>
-        public void FromSerialized(SerializableInstallationOptions_v1 options)
+        public void FromSerializable(SerializableInstallationOptions_v1 options)
         {
             SkipHashCheck = options.SkipHashCheck;
             InteractiveInstallation = options.InteractiveInstallation;
@@ -97,10 +102,17 @@ namespace UniGetUI.PackageEngine.PackageClasses
             CustomInstallLocation = options.CustomInstallLocation;
             Version = options.Version;
             PreRelease = options.PreRelease;
+
             if (options.Architecture != "" && CommonTranslations.InvertedArchNames.ContainsKey(options.Architecture))
+            {
                 Architecture = CommonTranslations.InvertedArchNames[options.Architecture];
+            }
+
             if (options.InstallationScope != "" && CommonTranslations.InvertedScopeNames_NonLang.ContainsKey(options.InstallationScope))
+            {
                 InstallationScope = CommonTranslations.InvertedScopeNames_NonLang[options.InstallationScope];
+            }
+
             CustomParameters = options.CustomParameters;
         }
 
@@ -108,7 +120,7 @@ namespace UniGetUI.PackageEngine.PackageClasses
         /// Returns a SerializableInstallationOptions_v1 object containing the options of the current instance.
         /// </summary>
         /// <returns></returns>
-        public SerializableInstallationOptions_v1 Serialized()
+        public SerializableInstallationOptions_v1 AsSerializable()
         {
             SerializableInstallationOptions_v1 options = new();
             options.SkipHashCheck = SkipHashCheck;
@@ -118,9 +130,15 @@ namespace UniGetUI.PackageEngine.PackageClasses
             options.PreRelease = PreRelease;
             options.Version = Version;
             if (Architecture != null)
+            {
                 options.Architecture = CommonTranslations.ArchNames[Architecture.Value];
+            }
+
             if (InstallationScope != null)
+            {
                 options.InstallationScope = CommonTranslations.ScopeNames_NonLang[InstallationScope.Value];
+            }
+
             options.CustomParameters = CustomParameters;
             return options;
         }
@@ -132,9 +150,17 @@ namespace UniGetUI.PackageEngine.PackageClasses
         }
 
         /// <summary>
+        /// Saves the current options to disk, asynchronously.
+        /// </summary>
+        public async Task SaveToDiskAsync()
+        {
+            await Task.Run(() => SaveToDisk());
+        }
+
+        /// <summary>
         /// Saves the current options to disk.
         /// </summary>
-        public void SaveOptionsToDisk()
+        public void SaveToDisk()
         {
             try
             {
@@ -142,8 +168,8 @@ namespace UniGetUI.PackageEngine.PackageClasses
                 if (optionsFile.Directory?.Exists == false)
                     optionsFile.Directory.Create();
 
-                using FileStream outputStream = optionsFile.OpenWrite();
-                JsonSerializer.Serialize(outputStream, Serialized());
+                string fileContents = JsonSerializer.Serialize(AsSerializable());
+                File.WriteAllText(optionsFile.FullName, fileContents);
             }
             catch (Exception ex)
             {
@@ -153,56 +179,9 @@ namespace UniGetUI.PackageEngine.PackageClasses
         }
 
         /// <summary>
-        /// Saves the current options to disk, asynchronously.
-        /// </summary>
-        public async Task SaveOptionsToDiskAsync()
-        {
-            try
-            {
-                FileInfo optionsFile = GetPackageOptionsFile();
-                if (optionsFile.Directory?.Exists == false)
-                    optionsFile.Directory.Create();
-
-                await using FileStream outputStream = optionsFile.OpenWrite();
-                await JsonSerializer.SerializeAsync(outputStream, Serialized());
-            }
-            catch (Exception ex)
-            {
-                Logger.Error($"[ASYNC] Could not save {Package.Id} options to disk");
-                Logger.Error(ex);
-            }
-        }
-
-        /// <summary>
-        /// Loads the options from disk, asynchronously.
-        /// </summary>
-        public void LoadOptionsFromDisk()
-        {
-            try
-            {
-                FileInfo optionsFile = GetPackageOptionsFile();
-                if (!optionsFile.Exists)
-                    return;
-
-                using FileStream inputStream = optionsFile.OpenRead();
-                SerializableInstallationOptions_v1? options = JsonSerializer.Deserialize<SerializableInstallationOptions_v1>(inputStream);
-
-                if (options == null)
-                    throw new Exception("Deserialized options cannot be null.");
-                
-                FromSerialized(options);
-            }
-            catch (Exception e)
-            {
-                Logger.Error($"Could not load {Package.Id} options from disk");
-                Logger.Error(e);
-            }
-        }
-
-        /// <summary>
         /// Loads the options from disk.
         /// </summary>
-        public async Task LoadOptionsFromDiskAsync()
+        private void LoadFromDisk()
         {
             FileInfo optionsFile = GetPackageOptionsFile();
             try
@@ -211,19 +190,19 @@ namespace UniGetUI.PackageEngine.PackageClasses
                     return;
 
 
-                await using FileStream inputStream = optionsFile.OpenRead();
-                SerializableInstallationOptions_v1? options = await JsonSerializer.DeserializeAsync<SerializableInstallationOptions_v1>(inputStream);
+                using FileStream inputStream = optionsFile.OpenRead();
+                SerializableInstallationOptions_v1? options = JsonSerializer.Deserialize<SerializableInstallationOptions_v1>(inputStream);
 
                 if (options == null)
                     throw new Exception("Deserialized options cannot be null!");
                 
-                FromSerialized(options);
+                FromSerializable(options);
                 Logger.Debug($"InstallationOptions loaded successfully from disk for package {Package.Id}");
             }
             catch (JsonException)
             {
                 Logger.Warn("An error occurred while parsing package " + optionsFile + ". The file will be overwritten");
-                await File.WriteAllTextAsync(optionsFile.FullName, "{}");
+                File.WriteAllText(optionsFile.FullName, "{}");
             }
             catch (Exception e)
             {

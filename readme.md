@@ -1,11 +1,10 @@
 # <img src="https://raw.githubusercontent.com/marticliment/WingetUI/main/media/icon_old.png" height="40">WingetUI (soon <img src="https://raw.githubusercontent.com/marticliment/WingetUI/main/media/icon.png" height="40">UniGetUI)
 
-[![Downloads@latest](https://img.shields.io/github/downloads/marticliment/WingetUI/2.2.0/total?style=for-the-badge)](https://github.com/marticliment/WingetUI/releases/latest/download/WingetUI.Installer.exe)
+[![Downloads@latest](https://img.shields.io/github/downloads/marticliment/WingetUI/3.0.2/total?style=for-the-badge)](https://github.com/marticliment/WingetUI/releases/latest/download/WingetUI.Installer.exe)
 [![Release Version Badge](https://img.shields.io/github/v/release/marticliment/WingetUI?style=for-the-badge)](https://github.com/marticliment/WingetUI/releases)
 [![Issues Badge](https://img.shields.io/github/issues/marticliment/WingetUI?style=for-the-badge)](https://github.com/marticliment/WingetUI/issues)
 [![Closed Issues Badge](https://img.shields.io/github/issues-closed/marticliment/WingetUI?color=%238256d0&style=for-the-badge)](https://github.com/marticliment/WingetUI/issues?q=is%3Aissue+is%3Aclosed)<br>
-
-The main goal of this project is to create an intuitive GUI for the most common CLI package managers for Windows 10 and Windows 11, such as [Winget](https://learn.microsoft.com/en-us/windows/package-manager/), [Scoop](https://scoop.sh/), [Chocolatey](https://chocolatey.org/), [Pip](https://pypi.org/), [Npm](https://www.npmjs.com/), [.NET Tool](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-tool-install) and [PowerShell Gallery](https://www.powershellgallery.com/).
+The main goal of this project is to create an intuitive GUI for the most common CLI package managers for Windows 10 and 11, such as [Winget](https://learn.microsoft.com/en-us/windows/package-manager/), [Scoop](https://scoop.sh/), [Chocolatey](https://chocolatey.org/), [Pip](https://pypi.org/), [Npm](https://www.npmjs.com/), [.NET Tool](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-tool-install) and [PowerShell Gallery](https://www.powershellgallery.com/).
 With this app, you can easily download, install, update, and uninstall any software published on the supported package managers — and much more!
 
 **WingetUI** will become **UniGetUI** soon. Please check [this discussion](https://github.com/marticliment/WingetUI/discussions/1900) for more details
@@ -17,9 +16,12 @@ Check out the [Supported Package Managers Table](#supported-package-managers) fo
 **Disclaimer:** This project has no connection with any supported package managers — it's completely unofficial. Be aware that I, the developer of WingetUI, am NOT responsible for the downloaded apps.
 
 ![Endpoint Badge](https://img.shields.io/endpoint?url=https%3A%2F%2Fmarticliment.com%2Fresources%2Fbadges%2Fdev-status.json)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/marticliment/WingetUI/dotnet-test.yml?branch=main&style=for-the-badge&label=Tests)
+![Code Quality](https://img.shields.io/codacy/grade/1e95b227569048fb86ce08b835987353?style=for-the-badge)
+<br>
  
 ## Table of contents
- - **[WingetUI Homepage](https://www.marticliment.com/wingetui/)**
+ - **[WingetUI Homepage](https://www.marticliment.com/unigetui/)**
  - [Table of contents](#table-of-contents)
  - [Installation](#installation)
  - [Update WingetUI](#update-wingetui)
@@ -41,7 +43,7 @@ Check out the [Supported Package Managers Table](#supported-package-managers) fo
 
 **Install WingetUI through Winget:**    
 ```cmd
-winget install SomePythonThings.WingetUIStore
+winget install --exact wingetui --source winget
 ```
 
 **Install WingetUI through Scoop:**
@@ -126,8 +128,9 @@ To translate WingetUI to other languages or to update an old translation, please
 | <img src='https://flagcdn.com/gb.svg' width=20> &nbsp; English - English | 100% | [marticliment](https://github.com/marticliment), [ppvnf](https://github.com/ppvnf) |
 | <img src='https://flagcdn.com/es.svg' width=20> &nbsp; Spanish - Castellano | 100% | [apazga](https://github.com/apazga), [dalbitresb12](https://github.com/dalbitresb12), [evaneliasyoung](https://github.com/evaneliasyoung), [guplem](https://github.com/guplem), [JMoreno97](https://github.com/JMoreno97), [marticliment](https://github.com/marticliment), [rubnium](https://github.com/rubnium), [uKER](https://github.com/uKER) |
 | <img src='https://flagcdn.com/ir.svg' width=20> &nbsp; Persian - فارسی‎ | 66% | [Imorate](https://github.com/Imorate), [itsarian](https://github.com/itsarian), [Mahdi-Hazrati](https://github.com/Mahdi-Hazrati), [smsi2001](https://github.com/smsi2001) |
-| <img src='https://flagcdn.com/fi.svg' width=20> &nbsp; Finnish - Suomi | 49% | [simakuutio](https://github.com/simakuutio) |
+| <img src='https://flagcdn.com/fi.svg' width=20> &nbsp; Finnish - Suomi | 53% | [simakuutio](https://github.com/simakuutio) |
 | <img src='https://flagcdn.com/fr.svg' width=20> &nbsp; French - Français | 100% | BreatFR, Evans Costa, [PikPakPik](https://github.com/PikPakPik), Rémi Guerrero, [W1L7dev](https://github.com/W1L7dev) |
+| <img src='https://flagcdn.com/gu.svg' width=20> &nbsp; Gujarati - ગુજરાતી | 11% |  |
 | <img src='https://flagcdn.com/in.svg' width=20> &nbsp; Hindi - हिंदी | 56% | [atharva_xoxo](https://github.com/atharva_xoxo), [satanarious](https://github.com/satanarious) |
 | <img src='https://flagcdn.com/hr.svg' width=20> &nbsp; Croatian - Hrvatski | 60% | Stjepan Treger |
 | <img src='https://flagcdn.com/il.svg' width=20> &nbsp; Hebrew - עִבְרִית‎ | 50% | Oryan |
@@ -137,27 +140,29 @@ To translate WingetUI to other languages or to update an old translation, please
 | <img src='https://flagcdn.com/jp.svg' width=20> &nbsp; Japanese - 日本語 | 98% | [nob-swik](https://github.com/nob-swik), sho9029, [tacostea](https://github.com/tacostea), Yuki Takase |
 | <img src='https://flagcdn.com/kr.svg' width=20> &nbsp; Korean - 한국어 | 88% | [minbert](https://github.com/minbert), [shblue21](https://github.com/shblue21), [VenusGirl](https://github.com/VenusGirl) |
 | <img src='https://flagcdn.com/mk.svg' width=20> &nbsp; Macedonian - Македонски | 66% | LordDeatHunter |
-| <img src='https://flagcdn.com/no.svg' width=20> &nbsp; Norwegian (bokmål) | 99% | [yrjarv](https://github.com/yrjarv) |
-| <img src='https://flagcdn.com/no.svg' width=20> &nbsp; Norwegian (nynorsk) | 99% | [yrjarv](https://github.com/yrjarv) |
+| <img src='https://flagcdn.com/no.svg' width=20> &nbsp; Norwegian (bokmål) | 100% | [yrjarv](https://github.com/yrjarv) |
+| <img src='https://flagcdn.com/no.svg' width=20> &nbsp; Norwegian (nynorsk) | 100% | [yrjarv](https://github.com/yrjarv) |
 | <img src='https://flagcdn.com/nl.svg' width=20> &nbsp; Dutch - Nederlands | 100% | [abbydiode](https://github.com/abbydiode), [Stephan-P](https://github.com/Stephan-P) |
 | <img src='https://flagcdn.com/pl.svg' width=20> &nbsp; Polish - Polski | 99% | [KamilZielinski](https://github.com/KamilZielinski), [kwiateusz](https://github.com/kwiateusz), [RegularGvy13](https://github.com/RegularGvy13), [ThePhaseless](https://github.com/ThePhaseless) |
-| <img src='https://flagcdn.com/br.svg' width=20> &nbsp; Portuguese (Brazil) | 99% | [maisondasilva](https://github.com/maisondasilva), [ppvnf](https://github.com/ppvnf), [Rodrigo-Matsuura](https://github.com/Rodrigo-Matsuura), [wanderleihuttel](https://github.com/wanderleihuttel) |
+| <img src='https://flagcdn.com/br.svg' width=20> &nbsp; Portuguese (Brazil) | 100% | [maisondasilva](https://github.com/maisondasilva), [ppvnf](https://github.com/ppvnf), [Rodrigo-Matsuura](https://github.com/Rodrigo-Matsuura), [thiagojramos](https://github.com/thiagojramos), [wanderleihuttel](https://github.com/wanderleihuttel) |
 | <img src='https://flagcdn.com/pt.svg' width=20> &nbsp; Portuguese (Portugal) | 99% | [PoetaGA](https://github.com/PoetaGA), [Tiago_Ferreira](https://github.com/Tiago_Ferreira) |
 | <img src='https://flagcdn.com/ro.svg' width=20> &nbsp; Romanian - Română | 100% | [SilverGreen93](https://github.com/SilverGreen93), TZACANEL |
-| <img src='https://flagcdn.com/ru.svg' width=20> &nbsp; Russian - Русский | 99% | [bropines](https://github.com/bropines), [DvladikD](https://github.com/DvladikD), [flatron4eg](https://github.com/flatron4eg), [katrovsky](https://github.com/katrovsky), Sergey, sklart |
+| <img src='https://flagcdn.com/ru.svg' width=20> &nbsp; Russian - Русский | 100% | [bropines](https://github.com/bropines), [DvladikD](https://github.com/DvladikD), [flatron4eg](https://github.com/flatron4eg), [katrovsky](https://github.com/katrovsky), Sergey, sklart |
+| <img src='https://flagcdn.com/sk.svg' width=20> &nbsp; Slovak - Slovenčina | 10% | [Luk164](https://github.com/Luk164) |
 | <img src='https://flagcdn.com/rs.svg' width=20> &nbsp; Serbian - Srpski | 70% | [daVinci13](https://github.com/daVinci13), Nemanja Djurcic |
 | <img src='https://flagcdn.com/al.svg' width=20> &nbsp; Albanian - Shqip | 100% | [RDN000](https://github.com/RDN000) |
 | <img src='https://flagcdn.com/lk.svg' width=20> &nbsp; Sinhala - සිංහල | 6% | [SashikaSandeepa](https://github.com/SashikaSandeepa) |
 | <img src='https://flagcdn.com/si.svg' width=20> &nbsp; Slovene - Slovenščina | 99% | [rumplin](https://github.com/rumplin) |
+| <img src='https://flagcdn.com/se.svg' width=20> &nbsp; Swedish - Svenska | 52% | [curudel](https://github.com/curudel) |
 | <img src='https://flagcdn.com/ph.svg' width=20> &nbsp; Tagalog - Tagalog | 15% | lasersPew |
 | <img src='https://flagcdn.com/th.svg' width=20> &nbsp; Thai - ภาษาไทย | 81% | [apaeisara](https://github.com/apaeisara), [dulapahv](https://github.com/dulapahv) |
-| <img src='https://flagcdn.com/tr.svg' width=20> &nbsp; Turkish - Türkçe | 99% | [ahmetozmtn](https://github.com/ahmetozmtn), [dogancanyr](https://github.com/dogancanyr), [gokberkgs](https://github.com/gokberkgs) |
+| <img src='https://flagcdn.com/tr.svg' width=20> &nbsp; Turkish - Türkçe | 100% | [ahmetozmtn](https://github.com/ahmetozmtn), [dogancanyr](https://github.com/dogancanyr), [gokberkgs](https://github.com/gokberkgs) |
 | <img src='https://flagcdn.com/ua.svg' width=20> &nbsp; Ukranian - Yкраї́нська | 59% | Artem Moldovanenko, Operator404 |
 | <img src='https://flagcdn.com/vn.svg' width=20> &nbsp; Vietnamese - Tiếng Việt | 99% | [legendsjoon](https://github.com/legendsjoon), [txavlog](https://github.com/txavlog) |
-| <img src='https://flagcdn.com/cn.svg' width=20> &nbsp; Simplified Chinese (China) | 99% | Aaron Liu, adfnekc, [arthurfsy2](https://github.com/arthurfsy2), [bai0012](https://github.com/bai0012), BUGP Association, ciaran, CnYeSheng, Cololi, [FloatStream](https://github.com/FloatStream), [SpaceTimee](https://github.com/SpaceTimee), Yisme |
+| <img src='https://flagcdn.com/cn.svg' width=20> &nbsp; Simplified Chinese (China) | 100% | Aaron Liu, adfnekc, [arthurfsy2](https://github.com/arthurfsy2), [bai0012](https://github.com/bai0012), BUGP Association, ciaran, CnYeSheng, Cololi, [FloatStream](https://github.com/FloatStream), [SpaceTimee](https://github.com/SpaceTimee), Yisme |
 | <img src='https://flagcdn.com/tw.svg' width=20> &nbsp; Traditional Chinese (Taiwan) | 99% | Aaron Liu, CnYeSheng, Cololi, [Henryliu880922](https://github.com/Henryliu880922), [yrctw](https://github.com/yrctw) |
 
-Last updated: Mon May 27 00:11:30 2024
+Last updated: Mon Jul  1 14:39:12 2024
 <!-- END Autogenerated translations -->
 
 
@@ -231,10 +236,14 @@ To mitigate the risks of downloading malware, Microsoft has implemented a few ch
 `--daemon`: Start WingetUI without spawning a new window. WingetUI will run minimized on the system tray. WingetUI is called with this parameter when launched at startup. **Autostart WingetUI in the notifications area** must be enabled for this parameter to work.<br>
 `--welcomewizard` (or simply `--welcome`): Show a window to choose which package managers to use.<br>
 `--updateapps`: Enable automatic installation of available updates.<br>
-`--report-all-errors`: May help debug crashes (WingetUI 3.0 and newer)
+`--report-all-errors`: May help debug crashes (WingetUI 3.0 and newer)<br>
+Since 3.1.0: `--uninstall-unigetui`: Attempts to unregister UniGetUI from the notification panel, and silently quit<br>
+Since 3.1.0: `--migrate-wingetui-to-unigetui`: Attempts to migrate WingetUI data folders and shortcuts to UniGetUI, and silently quits<br>
 
 ### Installer command-line parameters:
 The installer is inno-setup based, so it supports regular Inno Setup command-line parameters. Additionally, it also supports the following parameters:
- <br>`/NoAutoStart`: Will not launch WingetUI after installing it.
+<br>`/NoAutoStart`: Will not launch WingetUI after installing it.
 <br> `/ALLUSERS`: Install WingetUI for every user
 <br> `/CURRENTUSER`: Install WingetUI for the current user only
+<br> Since 3.1.0: `/NoChocolatey`: Do NOT install chocolatey within WingetUI
+<br> Since 3.1.0: `/NoWinGet `: Do NOT install WinGet and Microsoft.WinGet.Client if not installed **(not recommended)**

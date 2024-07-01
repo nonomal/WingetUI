@@ -1,13 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.Diagnostics;
 using UniGetUI.Core.IconEngine;
 using UniGetUI.Core.Logging;
 using UniGetUI.Core.Tools;
 using UniGetUI.PackageEngine.Classes.Manager.BaseProviders;
+using UniGetUI.PackageEngine.ManagerClasses.Classes;
 using UniGetUI.PackageEngine.ManagerClasses.Manager;
 using UniGetUI.PackageEngine.PackageClasses;
 
@@ -17,21 +13,20 @@ namespace UniGetUI.PackageEngine.Managers.NpmManager
     {
         public NpmPackageDetailsProvider(Npm manager) : base(manager) { }
 
-        protected override async Task<PackageDetails> GetPackageDetails_Unsafe(Package package)
+        protected override async Task GetPackageDetails_Unsafe(PackageDetails details)
         {
-            PackageDetails details = new(package);
             try
             {
                 details.InstallerType = "Tarball";
-                details.ManifestUrl = new Uri($"https://www.npmjs.com/package/{package.Id}");
-                details.ReleaseNotesUrl = new Uri($"https://www.npmjs.com/package/{package.Id}?activeTab=versions");
+                details.ManifestUrl = new Uri($"https://www.npmjs.com/package/{details.Package.Id}");
+                details.ReleaseNotesUrl = new Uri($"https://www.npmjs.com/package/{details.Package.Id}?activeTab=versions");
 
                 using (Process p = new())
                 {
                     p.StartInfo = new ProcessStartInfo()
                     {
                         FileName = Manager.Status.ExecutablePath,
-                        Arguments = Manager.Properties.ExecutableCallArgs + " info " + package.Id,
+                        Arguments = Manager.Properties.ExecutableCallArgs + " info " + details.Package.Id,
                         UseShellExecute = false,
                         RedirectStandardOutput = true,
                         RedirectStandardError = true,
@@ -41,18 +36,13 @@ namespace UniGetUI.PackageEngine.Managers.NpmManager
                         StandardOutputEncoding = System.Text.Encoding.UTF8
                     };
 
+                    ProcessTaskLogger logger = Manager.TaskLogger.CreateNew(Enums.LoggableTaskType.LoadPackageDetails, p);
                     p.Start();
 
-                    List<string> output = new();
-                    string? line;
-                    while ((line = await p.StandardOutput.ReadLineAsync()) != null)
-                    {
-                        output.Add(line);
-                    }
-
+                    string? outLine;
                     int lineNo = 0;
                     bool ReadingMaintainer = false;
-                    foreach (string outLine in output)
+                    while ((outLine = await p.StandardOutput.ReadLineAsync()) != null)
                     {
                         try
                         {
@@ -95,9 +85,13 @@ namespace UniGetUI.PackageEngine.Managers.NpmManager
                         }
                         catch (Exception e)
                         {
-                            Logger.Warn(e);
+                            logger.AddToStdErr(e.ToString());
                         }
                     }
+
+                    logger.AddToStdErr(await p.StandardError.ReadToEndAsync());
+                    await p.WaitForExitAsync();
+                    logger.Close(p.ExitCode);
                 }
             }
             catch (Exception e)
@@ -105,7 +99,7 @@ namespace UniGetUI.PackageEngine.Managers.NpmManager
                 Logger.Error(e);
             }
 
-            return details;
+            return;
         }
 
         protected override Task<CacheableIcon?> GetPackageIcon_Unsafe(Package package)
@@ -120,32 +114,36 @@ namespace UniGetUI.PackageEngine.Managers.NpmManager
 
         protected override async Task<string[]> GetPackageVersions_Unsafe(Package package)
         {
-            Process p = new()
+            Process p = new();
+            p.StartInfo = new ProcessStartInfo()
             {
-                StartInfo = new ProcessStartInfo()
-                {
-                    FileName = Manager.Status.ExecutablePath,
-                    Arguments = Manager.Properties.ExecutableCallArgs + " show " + package.Id + " versions --json",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    RedirectStandardInput = true,
-                    CreateNoWindow = true,
-                    WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    StandardOutputEncoding = System.Text.Encoding.UTF8
-                }
+                FileName = Manager.Status.ExecutablePath,
+                Arguments = Manager.Properties.ExecutableCallArgs + " show " + package.Id + " versions --json",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                RedirectStandardInput = true,
+                CreateNoWindow = true,
+                WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                StandardOutputEncoding = System.Text.Encoding.UTF8
             };
+
+            ProcessTaskLogger logger = Manager.TaskLogger.CreateNew(Enums.LoggableTaskType.LoadPackageVersions, p);
+            p.Start();
 
             string? line;
             List<string> versions = new();
 
-            p.Start();
-
             while ((line = await p.StandardOutput.ReadLineAsync()) != null)
             {
+                logger.AddToStdOut(line);
                 if (line.Contains("\""))
                     versions.Add(line.Trim().TrimStart('"').TrimEnd(',').TrimEnd('"'));
             }
+
+            logger.AddToStdErr(await p.StandardError.ReadToEndAsync());
+            await p.WaitForExitAsync();
+            logger.Close(p.ExitCode);
 
             return versions.ToArray();
         }

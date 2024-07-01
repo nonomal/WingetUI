@@ -213,6 +213,7 @@
       "link": "https://github.com/W1L7dev"
     }
   ],
+  "gu": [],
   "he": [
     {
       "name": "Oryan",
@@ -369,6 +370,10 @@
       "link": "https://github.com/Rodrigo-Matsuura"
     },
     {
+      "name": "thiagojramos",
+      "link": "https://github.com/thiagojramos"
+    },
+    {
       "name": "wanderleihuttel",
       "link": "https://github.com/wanderleihuttel"
     }
@@ -453,7 +458,12 @@
       "link": ""
     }
   ],
-  "sv": [],
+  "sv": [
+    {
+      "name": "curudel",
+      "link": "https://github.com/curudel"
+    }
+  ],
   "tg": [
     {
       "name": "lasersPew",

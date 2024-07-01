@@ -1,16 +1,12 @@
 ﻿using Microsoft.UI.Xaml;
-using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
-using System.Threading.Tasks;
-using UniGetUI.Core.Logging;
-using UniGetUI.Core;
+using UniGetUI.Core.Classes;
+using UniGetUI.Core.Tools;
+using UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers;
+using UniGetUI.PackageEngine.ManagerClasses.Manager;
 using UniGetUI.PackageEngine.PackageClasses;
 using UniGetUI.PackageEngine.Serializable;
-using UniGetUI.PackageEngine.Enums;
-using UniGetUI.PackageEngine.ManagerClasses.Manager;
-using UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers;
-using UniGetUI.Core.Tools;
 
 namespace UniGetUI.PackageEngine.Classes
 {
@@ -62,9 +58,10 @@ namespace UniGetUI.PackageEngine.Classes
 
     
 
-    public class BundledPackage : INotifyPropertyChanged
+    public class BundledPackage : INotifyPropertyChanged, IIndexableListItem
     {
         public Package Package { get; }
+        public int Index { get; set; }
         public bool IsValid { get; set; } = true;
         public InstallationOptions InstallOptions { get; set; }
         public SerializableUpdatesOptions_v1 UpdateOptions;
@@ -162,7 +159,7 @@ namespace UniGetUI.PackageEngine.Classes
             Serializable.Version = Package.Version;
             Serializable.Source = Package.Source.Name;
             Serializable.ManagerName = Package.Manager.Name;
-            Serializable.InstallationOptions = InstallOptions.Serialized();
+            Serializable.InstallationOptions = InstallOptions.AsSerializable();
             Serializable.Updates = UpdateOptions;
             return Serializable;
         }
@@ -188,11 +185,11 @@ namespace UniGetUI.PackageEngine.Classes
 
     public class InvalidBundledPackage : BundledPackage
     {
-        string __name;
-        string __id;
-        string __version;
-        string __source;
-        string __manager;
+        readonly string __name;
+        readonly string __id;
+        readonly string __version;
+        readonly string __source;
+        readonly string __manager;
 
         public override string Name
         {
@@ -236,7 +233,7 @@ namespace UniGetUI.PackageEngine.Classes
             }
         }
 
-        public InvalidBundledPackage(string name, string id, string version, string source, string manager) : this(new Package(name, id, version, MainApp.Winget.DefaultSource, MainApp.Winget))
+        public InvalidBundledPackage(string name, string id, string version, string source, string manager) : this(new Package(name, id, version, PEInterface.WinGet.DefaultSource, PEInterface.WinGet))
         {
             IsValid = false;
             DrawOpacity = 0.5;
@@ -247,7 +244,7 @@ namespace UniGetUI.PackageEngine.Classes
             __manager = manager;
         }
 
-        public InvalidBundledPackage(Package package) : base(package, new InstallationOptions(package, reset: true), new SerializableUpdatesOptions_v1())
+        public InvalidBundledPackage(Package package) : base(package, InstallationOptions.FromPackage(package), new SerializableUpdatesOptions_v1())
         {
             IsValid = false;
             DrawOpacity = 0.5;

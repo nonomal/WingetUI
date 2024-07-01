@@ -1,8 +1,9 @@
-﻿using System;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 using System.Net;
+using System.Security.Cryptography;
 using System.Security.Principal;
+using System.Text;
 using UniGetUI.Core.Data;
 using UniGetUI.Core.Language;
 using UniGetUI.Core.Logging;
@@ -12,22 +13,35 @@ namespace UniGetUI.Core.Tools
     public static class CoreTools
     {
 
-        public static readonly HttpClientHandler HttpClientConfig = new HttpClientHandler()
+        public static readonly HttpClientHandler HttpClientConfig = new()
         {
             AutomaticDecompression = DecompressionMethods.All
         };
 
-        private static LanguageEngine? LanguageEngine;
+        private static LanguageEngine LanguageEngine = new();
 
         /// <summary>
         /// Translate a string to the current language
         /// </summary>
         /// <param name="text">The string to translate</param>
         /// <returns>The translated string if available, the original string otherwise</returns>
-        public static string Translate(string text)
-        {
-            if(LanguageEngine == null) LanguageEngine = new LanguageEngine();
+        public static string Translate(string text) {
             return LanguageEngine.Translate(text);
+        }
+
+        public static string Translate(string text, Dictionary<string, object?> dict)
+        {
+            return LanguageEngine.Translate(text, dict);
+        }
+
+        public static string Translate(string text, params object[] values)
+        {
+            Dictionary<string, object?> dict = [];
+            foreach ((object item, int index) in values.Select((item, index) => (item, index)))
+            {
+                dict.Add(index.ToString(), item);
+            }
+            return Translate(text, dict);
         }
 
         public static void ReloadLanguageEngineInstance(string ForceLanguage = "")
@@ -63,16 +77,19 @@ namespace UniGetUI.Core.Tools
         /// <returns>A tuple containing: a boolean hat represents wether the path was found or not; the path to the file if found.</returns>
         public static async Task<Tuple<bool, string>> Which(string command)
         {
+            command = command.Replace(";", "").Replace("&", "").Trim();
+            Logger.Debug($"Begin \"which\" search for command {command}");
             Process process = new()
             {
                 StartInfo = new ProcessStartInfo()
                 {
-                    FileName = "cmd.exe",
-                    Arguments = "/C where " + command,
+                    FileName = Path.Join(Environment.SystemDirectory, "where.exe"),
+                    Arguments = command,
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = System.Text.Encoding.UTF8
                 }
             };
             process.Start();
@@ -84,9 +101,15 @@ namespace UniGetUI.Core.Tools
                 output = line.Trim();
             await process.WaitForExitAsync();
             if (process.ExitCode != 0 || output == "")
+            {
+                Logger.ImportantInfo($"Command {command} was not found on the system");
                 return new Tuple<bool, string>(false, "");
+            }
             else
+            {
+                Logger.Debug($"Command {command} was found on {output}");
                 return new Tuple<bool, string>(File.Exists(output), output);
+            }
         }
 
         /// <summary>
@@ -127,7 +150,7 @@ namespace UniGetUI.Core.Tools
             string LangName = "Unknown";
             try
             {
-                LangName = Translate("langName");
+                LangName = LanguageEngine.Locale;
             }
             catch { }
 
@@ -155,7 +178,7 @@ Crash Traceback:
             using System.Diagnostics.Process cmd = new();
             cmd.StartInfo.FileName = "cmd.exe";
             cmd.StartInfo.RedirectStandardInput = true;
-            cmd.StartInfo.RedirectStandardOutput = false;
+            cmd.StartInfo.RedirectStandardOutput = true;
             cmd.StartInfo.CreateNoWindow = true;
             cmd.StartInfo.UseShellExecute = false;
             cmd.Start();
@@ -240,6 +263,11 @@ Crash Traceback:
             return 0;
         }
 
+        /// <summary>
+        /// Converts a string into a double floating-point number.
+        /// </summary>
+        /// <param name="Version">Any string</param>
+        /// <returns>The best approximation of the string as a Version</returns>
         public static double GetVersionStringAsFloat(string Version)
         {
             try
@@ -263,7 +291,7 @@ Crash Traceback:
                 if (_ver != "" && _ver != ".")
                     try
                     {
-                        var val = double.Parse(_ver, CultureInfo.InvariantCulture);
+                        double val = double.Parse(_ver, CultureInfo.InvariantCulture);
                         return val;
                     }
                     catch { }
@@ -290,9 +318,90 @@ Crash Traceback:
                         .Replace("<", string.Empty)
                         .Replace("%", string.Empty)
                         .Replace("\"", string.Empty)
+                        .Replace("~", string.Empty)
+                        .Replace("?", string.Empty)
+                        .Replace("/", string.Empty)
                         .Replace("'", string.Empty)
                         .Replace("\\", string.Empty)
                         .Replace("`", string.Empty);
+        }
+
+        /// <summary>
+        /// Returns null if the string is empty
+        /// </summary>
+        /// <param name="value">The string to check</param>
+        /// <returns>a string? instance</returns>
+        public static string? GetStringOrNull(string? value)
+        {
+            if (value == "") return null;
+            return value;
+        }
+
+        /// <summary>
+        /// Returns a new Uri if the string is not empty. Returns null otherwhise
+        /// </summary>
+        /// <param name="url">The null, empty or valid string</param>
+        /// <returns>an Uri? instance</returns>
+        public static Uri? GetUriOrNull(string? url)
+        {
+            if (url == "" || url == null) return null;
+            return new Uri(url);
+        }
+
+        /// <summary>
+        /// Enables GSudo cache for the current process
+        /// </summary>
+        public static async Task CacheUACForCurrentProcess()
+        {
+            Logger.Info("Caching admin rights for process id " + Process.GetCurrentProcess().Id);
+            Process p = new();
+            p.StartInfo = new ProcessStartInfo()
+            {
+                FileName = CoreData.GSudoPath,
+                Arguments = "cache on --pid " + Process.GetCurrentProcess().Id + " -d 1",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                RedirectStandardInput = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+            };  
+            p.Start();
+            await p.WaitForExitAsync();
+        }
+
+        /// <summary>
+        /// Reset UAC cache for the current process
+        /// </summary>
+        public static async Task ResetUACForCurrentProcess()
+        {
+            Logger.Info("Resetting administrator rights cache for process id " + Process.GetCurrentProcess().Id);
+            Process p = new();
+            p.StartInfo = new ProcessStartInfo()
+            {
+                FileName = CoreData.GSudoPath,
+                Arguments = "cache off --pid " + Process.GetCurrentProcess().Id,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                RedirectStandardInput = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+            };
+            p.Start();
+            await p.WaitForExitAsync();
+        }
+
+        /// <summary>
+        /// Returns the hash of the given string in the form of a long integer.
+        /// The long integer is built with the first half of the MD5 sum of the given string
+        /// </summary>
+        /// <param name="inputString">A non-empty string</param>
+        /// <returns>A long integer containing the first half of the bytes resultng from MD5suming inputString</returns>
+        public static long HashStringAsLong(string inputString)
+        {
+            byte[] bytes = MD5.HashData(Encoding.UTF8.GetBytes(inputString));
+            return BitConverter.ToInt64(bytes, 0);
         }
     }
 }

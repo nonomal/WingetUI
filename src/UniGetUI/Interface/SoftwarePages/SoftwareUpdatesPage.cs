@@ -1,58 +1,55 @@
 ﻿using CommunityToolkit.WinUI.Notifications;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media.Imaging;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using UniGetUI.Core.Data;
 using UniGetUI.Core.Logging;
 using UniGetUI.Core.SettingsEngine;
 using UniGetUI.Core.Tools;
 using UniGetUI.Interface.Enums;
 using UniGetUI.Interface.Widgets;
+using UniGetUI.PackageEngine;
 using UniGetUI.PackageEngine.Enums;
-using UniGetUI.PackageEngine.ManagerClasses.Manager;
 using UniGetUI.PackageEngine.Operations;
 using UniGetUI.PackageEngine.PackageClasses;
 
 namespace UniGetUI.Interface.SoftwarePages
 {
-    public class NewSoftwareUpdatesPage : AbstractPackagesPage
+    public class SoftwareUpdatesPage : AbstractPackagesPage
     {
         private BetterMenuItem? MenuAsAdmin;
         private BetterMenuItem? MenuInteractive;
         private BetterMenuItem? MenuskipHash;
 
-        public override void GenerateUIText()
+        public SoftwareUpdatesPage()
+        : base(new PackagesPageData()
         {
-            PAGE_NAME = "Updates";
-            SHOW_LAST_CHECKED_TIME = true;
+            DisableAutomaticPackageLoadOnStart = false,
+            MegaQueryBlockEnabled = false,
+            ShowLastLoadTime = true,
+            PackagesAreCheckedByDefault = true,
+            DisableSuggestedResultsRadio = true,
+            PageName = "Updates",
 
-            PageRole = OperationType.Update;
-            NoPackages_BackgroundText = CoreTools.Translate("Hooray! No updates were found.");
-            NoPackages_SourcesText = CoreTools.Translate("Everything is up to date");
-            NoPackages_SubtitleMainText = NoPackages_SourcesText;
+            Loader = PEInterface.UpgradablePackagesLoader,
+            PageRole = OperationType.Update,
 
-            NoMatches_BackgroundText = CoreTools.Translate("No results were found matching the input criteria");
-            NoMatches_SourcesText = CoreTools.Translate("No packages were found");
+            NoPackages_BackgroundText = CoreTools.Translate("Hooray! No updates were found."),
+            NoPackages_SourcesText = CoreTools.Translate("Everything is up to date"),
+            NoPackages_SubtitleText_Base = CoreTools.Translate("Everything is up to date"),
+            MainSubtitle_StillLoading = CoreTools.Translate("Loading packages"),
+            NoMatches_BackgroundText = CoreTools.Translate("No results were found matching the input criteria"),
 
-            MainTitleText = CoreTools.AutoTranslated("Software Updates");
-            MainTitleGlyph = "\uE895";
-
-            QuerySimilarResultsRadio.IsEnabled = false;
-            QueryOptionsGroup.SelectedIndex = 1;
-            QueryOptionsGroup.SelectedIndex = 2;
-            QueryOptionsGroup.SelectedItem = QueryBothRadio;
+            PageTitle = CoreTools.Translate("Software Updates"),
+            Glyph = "\uE895"
+        })
+        {
         }
 
         public override BetterMenu GenerateContextMenu()
         {
-            BetterMenu ContextMenu = new BetterMenu();
+            BetterMenu ContextMenu = new();
 
-            var menuInstall = new BetterMenuItem()
+            BetterMenuItem menuInstall = new()
             {
                 Text = "Update",
                 IconName="menu_updates",
@@ -60,13 +57,15 @@ namespace UniGetUI.Interface.SoftwarePages
             };
             menuInstall.Click += MenuInstall_Invoked;
 
-            var menuInstallSettings = new BetterMenuItem()
+            BetterMenuItem menuInstallSettings = new()
             {
                 Text = "Installation options",
                 IconName="options",
                 KeyboardAcceleratorTextOverride = "Alt+Enter"
             };
-            menuInstallSettings.Click += (s, e) => { ShowInstallationOptionsForPackage(PackageList.SelectedItem as Package); };
+            menuInstallSettings.Click += (s, e) => { 
+                ShowInstallationOptionsForPackage(SelectedItem); 
+            };
             
             MenuAsAdmin = new BetterMenuItem()
             {
@@ -89,14 +88,14 @@ namespace UniGetUI.Interface.SoftwarePages
             };
             MenuskipHash.Click += MenuSkipHash_Invoked;
 
-            var menuUpdateAfterUninstall = new BetterMenuItem()
+            BetterMenuItem menuUpdateAfterUninstall = new()
             {
                 Text = "Uninstall package, then update it",
                 IconName="undelete",
             };
             menuUpdateAfterUninstall.Click += MenuUpdateAfterUninstall_Invoked;
 
-            var menuUninstall = new BetterMenuItem()
+            BetterMenuItem menuUninstall = new()
             {
                 Text = "Uninstall package",
                 IconName="trash",
@@ -104,34 +103,34 @@ namespace UniGetUI.Interface.SoftwarePages
             menuUninstall.Click += MenuUninstall_Invoked;
 
 
-            var menuIgnorePackage = new BetterMenuItem()
+            BetterMenuItem menuIgnorePackage = new()
             {
                 Text = "Ignore updates for this package",
                 IconName="pin",
             };
             menuIgnorePackage.Click += MenuIgnorePackage_Invoked;
 
-            var menuSkipVersion = new BetterMenuItem()
+            BetterMenuItem menuSkipVersion = new()
             {
                 Text = "Skip this version",
                 IconName="skip",
             };
             menuSkipVersion.Click += MenuSkipVersion_Invoked;
 
-            var menuShare = new BetterMenuItem()
+            BetterMenuItem menuShare = new()
             {
                 Text = "Share this package",
                 IconName="share",
             };
-            menuShare.Click += (o, e) => { SharePackage(PackageList.SelectedItem as Package); };
+            menuShare.Click += (o, e) => SharePackage(SelectedItem);
 
-            var menuDetails = new BetterMenuItem()
+            BetterMenuItem menuDetails = new()
             {
                 Text = "Package details",
                 IconName="info",
                 KeyboardAcceleratorTextOverride = "Enter"
             };
-            menuDetails.Click += (o, e) => { ShowDetailsForPackage(PackageList.SelectedItem as Package); };
+            menuDetails.Click += (o, e) => ShowDetailsForPackage(SelectedItem);
 
             ContextMenu.Items.Add(menuInstall);
             ContextMenu.Items.Add(new MenuFlyoutSeparator());
@@ -164,9 +163,7 @@ namespace UniGetUI.Interface.SoftwarePages
             MenuAsAdmin.IsEnabled = package.Manager.Capabilities.CanRunAsAdmin;
             MenuInteractive.IsEnabled = package.Manager.Capabilities.CanRunInteractively;
             MenuskipHash.IsEnabled = package.Manager.Capabilities.CanSkipIntegrityChecks;
-
         }
-
 
         public override void GenerateToolBar()
         {
@@ -179,9 +176,6 @@ namespace UniGetUI.Interface.SoftwarePages
 
             AppBarButton PackageDetails = new();
             AppBarButton SharePackage = new();
-
-            AppBarButton SelectAll = new();
-            AppBarButton SelectNone = new();
 
             AppBarButton IgnoreSelected = new();
             AppBarButton ManageIgnored = new();
@@ -198,9 +192,6 @@ namespace UniGetUI.Interface.SoftwarePages
             ToolBar.PrimaryCommands.Add(PackageDetails);
             ToolBar.PrimaryCommands.Add(SharePackage);
             ToolBar.PrimaryCommands.Add(new AppBarSeparator());
-            ToolBar.PrimaryCommands.Add(SelectAll);
-            ToolBar.PrimaryCommands.Add(SelectNone);
-            ToolBar.PrimaryCommands.Add(new AppBarSeparator());
             ToolBar.PrimaryCommands.Add(IgnoreSelected);
             ToolBar.PrimaryCommands.Add(ManageIgnored);
             ToolBar.PrimaryCommands.Add(new AppBarSeparator());
@@ -216,8 +207,6 @@ namespace UniGetUI.Interface.SoftwarePages
                 { InstallationSettings, " " + CoreTools.Translate("Installation options") },
                 { PackageDetails,       " " + CoreTools.Translate("Package details") },
                 { SharePackage,         " " + CoreTools.Translate("Share") },
-                { SelectAll,            " " + CoreTools.Translate("Select all") },
-                { SelectNone,           " " + CoreTools.Translate("Clear selection") },
                 { IgnoreSelected,       CoreTools.Translate("Ignore selected packages") },
                 { ManageIgnored,        CoreTools.Translate("Manage ignored updates") },
                 { HelpButton,           CoreTools.Translate("Help") }
@@ -240,8 +229,6 @@ namespace UniGetUI.Interface.SoftwarePages
                 { InstallationSettings, "options" },
                 { PackageDetails,       "info" },
                 { SharePackage,         "share" },
-                { SelectAll,            "selectall" },
-                { SelectNone,           "selectnone" },
                 { IgnoreSelected,       "pin" },
                 { ManageIgnored,        "clipboard_list" },
                 { HelpButton,           "help" }
@@ -251,92 +238,62 @@ namespace UniGetUI.Interface.SoftwarePages
                 toolButton.Icon = new LocalIcon(Icons[toolButton]);
 
 
-            PackageDetails.Click += (s, e) =>
-            {
-                if (PackageList.SelectedItem != null)
-                    ShowDetailsForPackage(PackageList.SelectedItem as Package);
-            };
-
-            HelpButton.Click += (s, e) => { MainApp.Instance.MainWindow.NavigationPage.ShowHelp(); };
-
-            InstallationSettings.Click += (s, e) =>
-            {   if (PackageList.SelectedItem != null)
-                    ShowInstallationOptionsForPackage(PackageList.SelectedItem as Package);
-            };
-
-            ManageIgnored.Click += async (s, e) => { await MainApp.Instance.MainWindow.NavigationPage.ManageIgnoredUpdatesDialog(); };
+            PackageDetails.Click += (s, e) => ShowDetailsForPackage(SelectedItem);
+            HelpButton.Click += (s, e) => MainApp.Instance.MainWindow.NavigationPage.ShowHelp();
+            InstallationSettings.Click += (s, e) => ShowInstallationOptionsForPackage(SelectedItem);
+            ManageIgnored.Click += async (s, e) => await MainApp.Instance.MainWindow.NavigationPage.ManageIgnoredUpdatesDialog();
             IgnoreSelected.Click += async (s, e) =>
             {
-                foreach (UpgradablePackage package in FilteredPackages.ToArray()) if (package.IsChecked)
-                    {
-                        await package.AddToIgnoredUpdatesAsync();
-                        MainApp.Instance.MainWindow.NavigationPage.UpdatesPage.RemoveCorrespondingPackages(package);
-                    }
+                foreach (Package package in FilteredPackages.GetCheckedPackages())
+                {
+                    await package.AddToIgnoredUpdatesAsync();
+                    PEInterface.UpgradablePackagesLoader.Remove(package);
+                }
             };
 
             UpdateSelected.Click += (s, e) =>
             {
-                foreach (UpgradablePackage package in FilteredPackages.ToArray()) if (package.IsChecked)
-                        MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package));
+                foreach (Package package in FilteredPackages.GetCheckedPackages())
+                {
+                    MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package));
+                }
             };
-            UpdateAsAdmin.Click += (s, e) =>
+
+            UpdateAsAdmin.Click += async (s, e) =>
             {
-                foreach (UpgradablePackage package in FilteredPackages.ToArray()) if (package.IsChecked)
-                        MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package,
-                            new InstallationOptions(package) { RunAsAdministrator = true }));
+                foreach (Package package in FilteredPackages.GetCheckedPackages())
+                {
+                    InstallationOptions options = await InstallationOptions.FromPackageAsync(package, elevated: true);
+                    MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package, options));
+                }
             };
-            UpdateSkipHash.Click += (s, e) =>
-            {
-                foreach (UpgradablePackage package in FilteredPackages.ToArray()) if (package.IsChecked)
-                        MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package,
-                            new InstallationOptions(package) { SkipHashCheck = true }));
-            };
-            UpdateInteractive.Click += (s, e) =>
-            {
-                foreach (UpgradablePackage package in FilteredPackages.ToArray()) if (package.IsChecked)
-                        MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package,
-                            new InstallationOptions(package) { InteractiveInstallation = true }));
-            };
-
-            SharePackage.Click += (s, e) =>
-            {
-                if (PackageList.SelectedItem != null)
-                    MainApp.Instance.MainWindow.SharePackage(PackageList.SelectedItem as Package);
-            };
-
-            SelectAll.Click += (s, e) => { SelectAllItems(); };
-            SelectNone.Click += (s, e) => { ClearItemSelection(); };
-
-        }
-
-        protected override async Task<bool> IsPackageValid(Package package)
-        {
-            if (await package.HasUpdatesIgnoredAsync(package.NewVersion))
-                return false;
-
-            if (package.IsUpgradable && package.NewerVersionIsInstalled())
-                return false;
             
-            return true;
-        }
+            UpdateSkipHash.Click += async (s, e) =>
+            {
+                foreach (Package package in FilteredPackages.GetCheckedPackages())
+                {
+                    InstallationOptions options = await InstallationOptions.FromPackageAsync(package, no_integrity: true);
+                    MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package, options));
+                }
+            };
+            
+            UpdateInteractive.Click += async (s, e) =>
+            {
+                foreach (Package package in FilteredPackages.GetCheckedPackages())
+                {
+                    InstallationOptions options = await InstallationOptions.FromPackageAsync(package, interactive: true);
+                    MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package, options));
+                }
+            };
 
-        protected override Task<Package[]> LoadPackagesFromManager(PackageManager manager)
-        {
-            return manager.GetAvailableUpdates();
+            SharePackage.Click += (s, e) => MainApp.Instance.MainWindow.SharePackage(SelectedItem);
         }
-#pragma warning disable 
-        protected override async Task WhenAddingPackage(Package package)
-        {
-            package.GetAvailablePackage()?.SetTag(PackageTag.IsUpgradable);
-            package.GetInstalledPackage()?.SetTag(PackageTag.IsUpgradable);
-        }
-#pragma warning restore
 
         protected override void WhenPackageCountUpdated()
         {
             try
             {
-                MainApp.Instance.TooltipStatus.AvailableUpdates = Packages.Count();
+                MainApp.Instance.TooltipStatus.AvailableUpdates = Loader.Packages.Count();
             }
             catch (Exception)
             { }
@@ -344,16 +301,17 @@ namespace UniGetUI.Interface.SoftwarePages
 
         public void UpdateAll()
         {
-            foreach (UpgradablePackage package in Packages)
+            foreach (Package package in Loader.Packages)
             {
-                MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package));
+                if (package.Tag != PackageTag.BeingProcessed && package.Tag != PackageTag.OnQueue)
+                    MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package));
             }
         }
 
-        protected override async Task WhenPackagesLoaded(ReloadReason reason)
+        protected override void WhenPackagesLoaded(ReloadReason reason)
         {
-            List<UpgradablePackage> upgradablePackages = new();
-            foreach (UpgradablePackage package in Packages)
+            List<Package> upgradablePackages = new();
+            foreach (Package package in Loader.Packages)
             {
                 if (package.Tag != PackageTag.OnQueue && package.Tag != PackageTag.BeingProcessed)
                     upgradablePackages.Add(package);
@@ -361,8 +319,8 @@ namespace UniGetUI.Interface.SoftwarePages
 
             if (upgradablePackages.Count > 0)
             {
-                string body = "";
-                string title = "";
+                string body;
+                string title;
                 string attribution = "";
                 bool ShowButtons = false;
                 if (Settings.Get("AutomaticallyUpdatePackages") || Environment.GetCommandLineArgs().Contains("--updateapps"))
@@ -370,14 +328,14 @@ namespace UniGetUI.Interface.SoftwarePages
                     if (upgradablePackages.Count == 1)
                     {
                         title = CoreTools.Translate("An update was found!");
-                        body = CoreTools.Translate("{0} is being updated to version {1}").Replace("{0}", upgradablePackages[0].Name).Replace("{1}", upgradablePackages[0].NewVersion);
-                        attribution = CoreTools.Translate("You have currently version {0} installed").Replace("{0}", upgradablePackages[0].Version);
+                        body = CoreTools.Translate("{0} is being updated to version {1}", upgradablePackages[0].Name, upgradablePackages[0].NewVersion);
+                        attribution = CoreTools.Translate("You have currently version {0} installed", upgradablePackages[0].Version);
                     }
                     else
                     {
                         title = CoreTools.Translate("Updates found!");
-                        body = CoreTools.Translate("{0} packages are being updated").Replace("{0}", upgradablePackages.Count.ToString()); ;
-                        foreach (UpgradablePackage package in upgradablePackages)
+                        body = CoreTools.Translate("{0} packages are being updated", upgradablePackages.Count); ;
+                        foreach (Package package in upgradablePackages)
                         {
                             attribution += package.Name + ", ";
                         }
@@ -390,14 +348,14 @@ namespace UniGetUI.Interface.SoftwarePages
                     if (upgradablePackages.Count == 1)
                     {
                         title = CoreTools.Translate("An update was found!");
-                        body = CoreTools.Translate("{0} can be updated to version {1}").Replace("{0}", upgradablePackages[0].Name).Replace("{1}", upgradablePackages[0].NewVersion);
-                        attribution = CoreTools.Translate("You have currently version {0} installed").Replace("{0}", upgradablePackages[0].Version);
+                        body = CoreTools.Translate("{0} can be updated to version {1}", upgradablePackages[0].Name, upgradablePackages[0].NewVersion);
+                        attribution = CoreTools.Translate("You have currently version {0} installed", upgradablePackages[0].Version);
                     }
                     else
                     {
                         title = CoreTools.Translate("Updates found!");
-                        body = CoreTools.Translate("{0} packages can be updated").Replace("{0}", upgradablePackages.Count.ToString()); ;
-                        foreach (UpgradablePackage package in upgradablePackages)
+                        body = CoreTools.Translate("{0} packages can be updated", upgradablePackages.Count); ;
+                        foreach (Package package in upgradablePackages)
                         {
                             attribution += package.Name + ", ";
                         }
@@ -437,97 +395,81 @@ namespace UniGetUI.Interface.SoftwarePages
                     }
                 }
             }
-
-            if (!Settings.Get("DisableAutoCheckforUpdates") && reason != ReloadReason.Manual && reason != ReloadReason.External)
-            {
-                long waitTime = 3600;
-                try
-                {
-                    waitTime = long.Parse(Settings.GetValue("UpdatesCheckInterval"));
-                    Logger.Debug($"Starting check for updates wait interval with waitTime={waitTime}");
-                }
-                catch
-                {
-                    Logger.Debug("Invalid value for UpdatesCheckInterval, using default value of 3600 seconds");
-                }
-                await Task.Delay(TimeSpan.FromSeconds(waitTime));
-                _ = LoadPackages(ReloadReason.Automated);
-            }
         }
 
         private void MenuInstall_Invoked(object sender, RoutedEventArgs e)
         {
-            var package = PackageList.SelectedItem as Package;
-            if (!Initialized || package == null)
-                return;
+            Package? package = SelectedItem;
+            if (package == null) return;
+
             MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package));
         }
 
-        private void MenuSkipHash_Invoked(object sender, RoutedEventArgs e)
+        private async void MenuSkipHash_Invoked(object sender, RoutedEventArgs e)
         {
-            var package = PackageList.SelectedItem as Package;
-            if (!Initialized || package == null)
-                return;
+            Package? package = SelectedItem;
+            if (package == null) return;
+
             MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package,
-                new InstallationOptions(package) { SkipHashCheck = true }));
+                await InstallationOptions.FromPackageAsync(package, no_integrity: true)));
         }
 
-        private void MenuInteractive_Invoked(object sender, RoutedEventArgs e)
+        private async void MenuInteractive_Invoked(object sender, RoutedEventArgs e)
         {
-            var package = PackageList.SelectedItem as Package;
-            if (!Initialized || package == null)
-                return;
+            Package? package = SelectedItem;
+            if (package == null) return;
+
             MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package,
-                new InstallationOptions(package) { InteractiveInstallation = true }));
+                await InstallationOptions.FromPackageAsync(package, interactive: true)));
         }
 
-        private void MenuAsAdmin_Invoked(object sender, RoutedEventArgs e)
+        private async void MenuAsAdmin_Invoked(object sender, RoutedEventArgs e)
         {
-            var package = PackageList.SelectedItem as Package;
-            if (!Initialized || package == null)
-                return;
+            Package? package = SelectedItem;
+            if (package == null) return;
+
             MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package,
-                new InstallationOptions(package) { RunAsAdministrator = true }));
+                await InstallationOptions.FromPackageAsync(package, elevated: true)));
         }
 
         private void MenuUpdateAfterUninstall_Invoked(object sender, RoutedEventArgs e)
         {
-            var package = PackageList.SelectedItem as Package;
-            if (!Initialized || package == null)
-                return;
-            MainApp.Instance.AddOperationToList(new UninstallPackageOperation(package));
-            MainApp.Instance.AddOperationToList(new InstallPackageOperation(package));
+            Package? package = SelectedItem;
+            if (package == null) return;
+
+            MainApp.Instance.AddOperationToList(new UninstallPackageOperation(package, IgnoreParallelInstalls: true));
+            MainApp.Instance.AddOperationToList(new InstallPackageOperation(package, IgnoreParallelInstalls: true));
         }
 
         private void MenuUninstall_Invoked(object sender, RoutedEventArgs e)
         {
-            var package = PackageList.SelectedItem as Package;
-            if (!Initialized || package == null)
-                return;
+            Package? package = SelectedItem;
+            if (package == null) return;
+
             MainApp.Instance.AddOperationToList(new UninstallPackageOperation(package));
         }
 
         private void MenuIgnorePackage_Invoked(object sender, RoutedEventArgs e)
         {
-            var package = PackageList.SelectedItem as Package;
-            if (!Initialized || package == null)
-                return;
+            Package? package = SelectedItem;
+            if (package == null) return;
+
             _ = package.AddToIgnoredUpdatesAsync();
-            MainApp.Instance.MainWindow.NavigationPage.UpdatesPage.RemoveCorrespondingPackages(package);
+            PEInterface.UpgradablePackagesLoader.Remove(package);
         }
 
         private void MenuSkipVersion_Invoked(object sender, RoutedEventArgs e)
         {
-            var package = PackageList.SelectedItem as Package;
-            if (!Initialized || package == null)
-                return;
+            Package? package = SelectedItem;
+            if (package == null) return;
+
             _ = package.AddToIgnoredUpdatesAsync((package).NewVersion);
-            MainApp.Instance.MainWindow.NavigationPage.UpdatesPage.RemoveCorrespondingPackages(package);
+            PEInterface.UpgradablePackagesLoader.Remove(package);
         }
 
         public void UpdatePackageForId(string id)
         {
-            foreach (UpgradablePackage package in Packages)
+            foreach (Package package in Loader.Packages)
             {
                 if (package.Id == id)
                 {
@@ -539,18 +481,9 @@ namespace UniGetUI.Interface.SoftwarePages
             Logger.Warn($"[WIDGETS] No package with id={id} was found");
         }
 
-        public void UpdateAllPackages()
-        {
-            Logger.Info("[WIDGETS] Updating all packages");
-            foreach (UpgradablePackage package in Packages)
-                if (package.Tag != PackageTag.OnQueue && package.Tag != PackageTag.BeingProcessed)
-                    MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package));
-        }
-
         public void UpdateAllPackagesForManager(string manager)
         {
-            Logger.Info($"[WIDGETS] Updating all packages for manager {manager}");
-            foreach (UpgradablePackage package in Packages)
+            foreach (Package package in Loader.Packages)
                 if (package.Tag != PackageTag.OnQueue && package.Tag != PackageTag.BeingProcessed)
                     if (package.Manager.Name == manager)
                         MainApp.Instance.AddOperationToList(new UpdatePackageOperation(package));

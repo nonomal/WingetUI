@@ -1,22 +1,15 @@
-﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.IO;
+﻿using System.ComponentModel;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Threading.Tasks;
 using UniGetUI.Core.Data;
+using UniGetUI.Core.IconEngine;
+using UniGetUI.Core.Logging;
 using UniGetUI.Core.Tools;
 using UniGetUI.Interface.Enums;
-using UniGetUI.Core.Logging;
-using UniGetUI.Core.IconEngine;
+using UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers;
+using UniGetUI.PackageEngine.Classes.Packages;
 using UniGetUI.PackageEngine.Enums;
 using UniGetUI.PackageEngine.ManagerClasses.Manager;
-using UniGetUI.PackageEngine.Classes.Packages;
-using UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers;
-using Windows.UI.Composition;
 
 namespace UniGetUI.PackageEngine.PackageClasses
 {
@@ -25,127 +18,43 @@ namespace UniGetUI.PackageEngine.PackageClasses
         // Internal properties
         private bool __is_checked = false;
         public event PropertyChangedEventHandler? PropertyChanged;
-        private string __listed_icon_id = "";
-        private string __name_tooltip = "";
         private PackageTag __tag;
-        private float __opacity = 1;
-        private bool __show_icon_highlight = false;
-        private string __hash = "";
 
-        public int NewVersionLabelWidth { get { return IsUpgradable? 125: 0; } }
-        public int NewVersionIconWidth { get { return IsUpgradable? 24: 0; } }
+        private readonly long __hash;
+        private readonly long __versioned_hash;
+
+        private PackageDetails? __details = null;
+        public PackageDetails Details
+        { 
+            get => __details ??= new PackageDetails(this);
+        }
 
         public PackageTag Tag
         {
-            get { return __tag; }
-
-            set
-            {
+            get  => __tag;
+            set {
                 __tag = value;
-                switch (__tag)
-                {
-                    case PackageTag.Default:
-                        ListedIconId = "install";
-                        ListIconShowHighlight = false;
-                        ListedOpacity = 1;
-                        ListedNameTooltip = Name;
-                        break;
-
-                    case PackageTag.AlreadyInstalled:
-                        ListedIconId = "installed";
-                        ListIconShowHighlight = true;
-                        ListedOpacity = 1;
-                        ListedNameTooltip = CoreTools.Translate("This package is already installed") + " - " + Name;
-                        break;
-
-                    case PackageTag.IsUpgradable:
-                        ListedIconId = "update";
-                        ListIconShowHighlight = true;
-                        ListedOpacity = 1;
-                        ListedNameTooltip = CoreTools.Translate("This package can be updated") + " - " + Name;
-                        break;
-
-                    case PackageTag.Pinned:
-                        ListedIconId = "pin_fill";
-                        ListIconShowHighlight = false;
-                        ListedOpacity = 1;
-                        ListedNameTooltip = CoreTools.Translate("Updates for this package are ignored") + " - " + Name;
-                        break;
-
-                    case PackageTag.OnQueue:
-                        ListedIconId = "sandclock";
-                        ListIconShowHighlight = false;
-                        ListedOpacity = .5F;
-                        ListedNameTooltip = CoreTools.Translate("This package is on the queue") + " - " + Name;
-                        break;
-
-                    case PackageTag.BeingProcessed:
-                        ListedIconId = "gears";
-                        ListIconShowHighlight = false;
-                        ListedOpacity = .5F;
-                        ListedNameTooltip = CoreTools.Translate("This package is being processed") + " - " + Name;
-                        break;
-
-                    case PackageTag.Failed:
-                        ListedIconId = "stop";
-                        ListIconShowHighlight = true;
-                        ListedOpacity = 1;
-                        ListedNameTooltip = CoreTools.Translate("An error occurred while processing this package") + " - " + Name;
-                        break;
-                }
+                OnPropertyChanged(nameof(Tag));
             }
         }
-
-        // Public properties
-        public bool ListIconShowHighlight
-        {
-            get { return __show_icon_highlight; }
-            set { __show_icon_highlight = value; OnPropertyChanged(); }
-        }
-
         public bool IsChecked
         {
             get { return __is_checked; }
-            set { __is_checked = value; OnPropertyChanged(); }
+            set { __is_checked = value; OnPropertyChanged(nameof(IsChecked)); }
         }
 
-        public string ListedIconId
-        {
-            set { __listed_icon_id = value; OnPropertyChanged(); }
-            get { return __listed_icon_id; }
-        }
-
-        public string ListedNameTooltip
-        {
-            get { return __name_tooltip; }
-            set { __name_tooltip = value; OnPropertyChanged(); }
-        }
-
-        public float ListedOpacity
-        {
-            get { return __opacity; }
-            set { __opacity = value; OnPropertyChanged(); }
-        }
-
-        public string IsCheckedAsString { get { return IsChecked ? "True" : "False"; } }
         public string Name { get; }
-        public string Id { get; set; }
+        public string Id { get; }
         public string Version { get; }
-        public float VersionAsFloat { get; }
-        public ManagerSource Source { get; set; }
+        public double VersionAsFloat { get; }
+        public double NewVersionAsFloat { get; }
+        public ManagerSource Source { get; }
         public PackageManager Manager { get; }
-        public string UniqueId { get; }
-        public string NewVersion { get; set; }
-        public virtual bool IsUpgradable { get; } = false;
+        public string NewVersion { get; }
+        public virtual bool IsUpgradable { get; }
         public PackageScope Scope { get; set; }
-        public string SourceAsString
-        {
-            get
-            {
-                if (Source != null) return Source.ToString();
-                else return "";
-            }
-        }
+        public readonly string SourceAsString;
+        public readonly string AutomationName;
 
         /// <summary>
         /// Constuct a package with a given name, id, version, source and manager, and an optional scope.
@@ -161,33 +70,94 @@ namespace UniGetUI.PackageEngine.PackageClasses
             Name = name;
             Id = id;
             Version = version;
+            VersionAsFloat = CoreTools.GetVersionStringAsFloat(version);
             Source = source;
             Manager = manager;
             Scope = scope;
-            UniqueId = $"{Manager.Properties.Name}\\{Id}\\{Version}";
             NewVersion = "";
-            VersionAsFloat = GetFloatVersion();
             Tag = PackageTag.Default;
-            __hash = Manager.Name + "\\" + Source.Name + "\\" + Id;
+            SourceAsString = source.ToString();
+            AutomationName = CoreTools.Translate("Package {name} from {manager}", new Dictionary<string, object?> { {"name", Name },{ "manager", SourceAsString } });
+            __hash = CoreTools.HashStringAsLong(Manager.Name + "\\" + Source.Name + "\\" + Id);
+            __versioned_hash = CoreTools.HashStringAsLong(Manager.Name + "\\" + Source.Name + "\\" + Id + "\\" + Version);
+            IsUpgradable = false;
         }
 
-        public string GetHash()
+        /// <summary>
+        /// Creates an UpgradablePackage object representing a package that can be upgraded; given its name, id, installed version, new version, source and manager, and an optional scope.
+        /// </summary>
+        /// <param name="name"></param>
+        /// <param name="id"></param>
+        /// <param name="installed_version"></param>
+        /// <param name="new_version"></param>
+        /// <param name="source"></param>
+        /// <param name="manager"></param>
+        /// <param name="scope"></param>
+        public Package(string name, string id, string installed_version, string new_version, ManagerSource source, PackageManager manager, PackageScope scope = PackageScope.Local)
+            : this(name, id, installed_version, source, manager, scope)
+        {
+            IsUpgradable = true;
+            NewVersion = new_version;
+            NewVersionAsFloat = CoreTools.GetVersionStringAsFloat(new_version);
+
+            // Packages in the updates tab are checked by default
+            IsChecked = true;
+        }
+
+        /// <summary>
+        /// Returns an identifier that can be used to compare different packahe instances that refer to the same package.
+        /// What is taken into account:
+        ///    - Manager and Source
+        ///    - Package Identifier
+        /// For more specific comparsion use GetVersionedHash()
+        /// </summary>
+        /// <returns></returns>
+        public long GetHash()
         {
             return __hash;
         }
 
+        /// <summary>
+        /// Returns an identifier that can be used to compare different packahe instances that refer to the same package.
+        /// What is taken into account:
+        ///    - Manager and Source
+        ///    - Package Identifier
+        ///    - Package version
+        ///    - Package new version (if any)
+        /// </summary>
+        /// <returns></returns>
+        public long GetVersionedHash()
+        {
+            return __versioned_hash;
+        }
 
         /// <summary>
-        /// Internal method
+        /// Check wether two packages are **REALLY** the same package.
+        /// What is taken into account:
+        ///    - Manager and Source
+        ///    - Package Identifier
+        ///    - Package version
+        ///    - Package new version (if any)
         /// </summary>
-        /// <param name="obj"></param>
+        /// <param name="other"></param>
         /// <returns></returns>
-        public override bool Equals(object? obj)
+        public override bool Equals(object? other)
         {
-            if (!(obj is Package))
-                return false;
-            else
-                return (obj as Package)?.GetHash() == GetHash();
+            return __versioned_hash == (other as Package)?.__versioned_hash;
+        }
+
+        /// <summary>
+        /// Check wether two package instances represent the same package.
+        /// What is taken into account:
+        ///    - Manager and Source
+        ///    - Package Identifier
+        /// For more specific comparsion use package.Equals(object? other)
+        /// </summary>
+        /// <param name="other">A package</param>
+        /// <returns>Wether the two instances refer to the same instance</returns>
+        public bool IsEquivalentTo(Package? other)
+        { 
+            return __hash == other?.__hash;
         }
 
         /// <summary>
@@ -208,8 +178,9 @@ namespace UniGetUI.PackageEngine.PackageClasses
 
         /// <summary>
         /// Get the package's icon url. If the package has no icon, a fallback image is returned.
+        /// After calling this method, the returned URL points to a location on the local machine
         /// </summary>
-        /// <returns>An always-valid URI object</returns>
+        /// <returns>An always-valid URI object, pointing to a file:// or to a ms-appx:// URL</returns>
         public async Task<Uri> GetIconUrl()
         {
             try
@@ -236,41 +207,15 @@ namespace UniGetUI.PackageEngine.PackageClasses
             }
         }
 
+        /// <summary>
+        /// Retrieves a list og URIs representing the available screenshots for this package.
+        /// </summary>
+        /// <returns></returns>
         public async Task<Uri[]> GetPackageScreenshots()
         {
             return await Manager.GetPackageScreenshotsUrl(this);
         }
 
-        /// <summary>
-        /// Returns a float representation of the package's version for comparison purposes.
-        /// </summary>
-        /// <returns>A float value. Returns 0.0F if the version could not be parsed</returns>
-        public float GetFloatVersion()
-        {
-            string _ver = "";
-            bool _dotAdded = false;
-            foreach (char _char in Version)
-            {
-                if (char.IsDigit(_char))
-                    _ver += _char;
-                else if (_char == '.')
-                {
-                    if (!_dotAdded)
-                    {
-                        _ver += _char;
-                        _dotAdded = true;
-                    }
-                }
-            }
-            float res = 0.0F;
-            if (_ver != "" && _ver != ".")
-                try
-                {
-                    return float.Parse(_ver);
-                }
-                catch { }
-            return res;
-        }
 
         /// <summary>
         /// Adds the package to the ignored updates list. If no version is provided, all updates are ignored.
@@ -407,8 +352,7 @@ namespace UniGetUI.PackageEngine.PackageClasses
         /// <returns>a Package object if found, null if not</returns>
         public Package? GetInstalledPackage()
         {
-            return PackageFactory.FindPackageOnInstalledOrNull(this);
-            
+            return PackageCacher.GetInstalledPackageOrNull(this);
         }
 
         /// <summary>
@@ -417,7 +361,7 @@ namespace UniGetUI.PackageEngine.PackageClasses
         /// <returns>a Package object if found, null if not</returns>
         public Package? GetAvailablePackage()
         {
-            return PackageFactory.FindPackageOnAvailableOrNull(this);
+            return PackageCacher.GetAvailablePackageOrNull(this);
         }
 
         /// <summary>
@@ -426,7 +370,7 @@ namespace UniGetUI.PackageEngine.PackageClasses
         /// <returns>a Package object if found, null if not</returns>
         public Package? GetUpgradablePackage()
         {
-            return PackageFactory.FindPackageOnUpdatesOrNull(this);
+            return PackageCacher.GetUpgradablePackageOrNull(this);
         }
 
         /// <summary>
@@ -442,7 +386,7 @@ namespace UniGetUI.PackageEngine.PackageClasses
         public bool NewerVersionIsInstalled()
         {
             if(!IsUpgradable) return false;
-            return PackageFactory.NewerVersionIsInstalled(this);
+            return PackageCacher.NewerVersionIsInstalled(this);
         }
 
     }

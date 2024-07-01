@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using System.Net;
-using System.Text;
-using System.Threading.Tasks;
+﻿using UniGetUI.Core.Data;
 using UniGetUI.Core.Logging;
 using UniGetUI.PackageEngine.PackageClasses;
 
@@ -12,7 +6,7 @@ namespace UniGetUI.PackageEngine.Managers.Generic.NuGet.Internal
 {
     internal static class PackageManifestLoader
     {
-        private static Dictionary<string, string> __manifest_cache = new();
+        private static readonly Dictionary<string, string> __manifest_cache = new();
 
         /// <summary>
         /// Returns the URL to the manifest of a NuGet-based package
@@ -51,14 +45,10 @@ namespace UniGetUI.PackageEngine.Managers.Generic.NuGet.Internal
 
             try
             {
-                HttpClientHandler handler = new HttpClientHandler()
+                using (HttpClient client = new(CoreData.GenericHttpClientParameters))
                 {
-                    AutomaticDecompression = DecompressionMethods.All
-                };
-
-                using (HttpClient client = new HttpClient(handler))
-                {
-                    var response = await client.GetAsync(PackageManifestUrl);
+                    client.DefaultRequestHeaders.UserAgent.ParseAdd(CoreData.UserAgentString);
+                    HttpResponseMessage response = await client.GetAsync(PackageManifestUrl);
                     if (!response.IsSuccessStatusCode && package.Version.EndsWith(".0"))
                         response = await client.GetAsync(new Uri(PackageManifestUrl.ToString().Replace(".0')", "')")));
 

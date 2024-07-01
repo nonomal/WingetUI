@@ -1,13 +1,8 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers;
+﻿using UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers;
 
 namespace UniGetUI.PackageEngine.ManagerClasses.Manager
 {
-    public class ManagerProperties
+    public struct ManagerProperties
     {
         public bool IsDummy = false;
         public string Name { get; set; } = "Unset";

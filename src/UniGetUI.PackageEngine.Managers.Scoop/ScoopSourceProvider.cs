@@ -1,10 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using System.Text;
+﻿using System.Diagnostics;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using UniGetUI.Core.Logging;
 using UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers;
 using UniGetUI.PackageEngine.Classes.Manager.Providers;
@@ -39,29 +34,30 @@ namespace UniGetUI.PackageEngine.Managers.ScoopManager
 
         protected override async Task<ManagerSource[]> GetSources_UnSafe()
         {
-            using (Process process = new())
+            using (Process p = new())
             {
-                process.StartInfo.FileName = Manager.Status.ExecutablePath;
-                process.StartInfo.Arguments = Manager.Properties.ExecutableCallArgs + " bucket list";
-                process.StartInfo.RedirectStandardOutput = true;
-                process.StartInfo.RedirectStandardError = true;
-                process.StartInfo.RedirectStandardInput = true;
-                process.StartInfo.UseShellExecute = false;
-                process.StartInfo.CreateNoWindow = true;
-                process.StartInfo.StandardInputEncoding = System.Text.Encoding.UTF8;
-                process.StartInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
+                p.StartInfo.FileName = Manager.Status.ExecutablePath;
+                p.StartInfo.Arguments = Manager.Properties.ExecutableCallArgs + " bucket list";
+                p.StartInfo.RedirectStandardOutput = true;
+                p.StartInfo.RedirectStandardError = true;
+                p.StartInfo.RedirectStandardInput = true;
+                p.StartInfo.UseShellExecute = false;
+                p.StartInfo.CreateNoWindow = true;
+                p.StartInfo.StandardInputEncoding = System.Text.Encoding.UTF8;
+                p.StartInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
+
+                ManagerClasses.Classes.ProcessTaskLogger logger = Manager.TaskLogger.CreateNew(LoggableTaskType.ListSources, p);
 
                 List<ManagerSource> sources = new();
 
-                process.Start();
+                p.Start();
 
-                string _output = "";
                 bool DashesPassed = false;
 
                 string? line;
-                while ((line = await process.StandardOutput.ReadLineAsync()) != null)
+                while ((line = await p.StandardOutput.ReadLineAsync()) != null)
                 {
-                    _output += line + "\n";
+                    logger.AddToStdOut(line);
                     try
                     {
                         if (!DashesPassed)
@@ -71,7 +67,7 @@ namespace UniGetUI.PackageEngine.Managers.ScoopManager
                         }
                         else if (line.Trim() != "")
                         {
-                            string[] elements = Regex.Replace(line.Replace("AM", "").Replace("PM", "").Trim(), " {2,}", " ").Split(' ');
+                            string[] elements = Regex.Replace(line.Replace("AM", "").Replace("am", "").Replace("PM", "").Replace("pm", "").Trim(), " {2,}", " ").Split(' ');
                             if (elements.Length >= 5)
                             {
                                 if (!elements[1].Contains("https://"))
@@ -85,12 +81,10 @@ namespace UniGetUI.PackageEngine.Managers.ScoopManager
                         Logger.Warn(e);
                     }
                 }
-                _output += await process.StandardError.ReadToEndAsync();
-                Manager.LogOperation(process, _output);
-
-                await process.WaitForExitAsync();
-
-
+                logger.AddToStdErr(await p.StandardError.ReadToEndAsync());
+                await p.WaitForExitAsync();
+                logger.Close(p.ExitCode);
+                
                 return sources.ToArray();
             }
         }

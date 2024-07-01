@@ -1,25 +1,16 @@
+using ExternalLibraries.Clipboard;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
-using System;
-using System.Collections.Generic;
+using Microsoft.UI.Xaml.Media;
 using System.Diagnostics;
-using System.IO;
-using UniGetUI.Core;
-using UniGetUI.Core.Data;
-using ExternalLibraries.Clipboard;
 using UniGetUI.Core.Logging;
-using Windows.Storage;
-using Windows.Storage.Pickers;
 using UniGetUI.Core.SettingsEngine;
 using UniGetUI.Core.Tools;
-using System.Linq;
-using Windows.UI.WebUI;
-using Microsoft.UI.Xaml.Media;
-using Windows.Media.Playback;
+using UniGetUI.PackageEngine;
+using Windows.Storage;
+using Windows.Storage.Pickers;
 using Windows.UI;
-using CommunityToolkit.WinUI.Controls;
-using CommunityToolkit.WinUI.Helpers;
 
 // To learn more about WinUI, the WinUI project structure,
 // and more about our project templates, see: http://aka.ms/winui-project-info.
@@ -37,7 +28,7 @@ namespace UniGetUI.Interface.Pages
         OperationHistory
     }
 
-    public sealed partial class Logger_LogPage : Page
+    public sealed partial class Logger_LogPage : Page, IPageWithKeyboardShortcuts
     {
         private int LOG_LEVEL = 4;
         public Logger_LogType Logger_LogType;
@@ -47,13 +38,46 @@ namespace UniGetUI.Interface.Pages
             Logger_LogType = logger_LogType;
             LoadLog();
 
-            LogLevelCombo.Items.Add(CoreTools.Translate("1 - Errors"));
-            LogLevelCombo.Items.Add(CoreTools.Translate("2 - Warnings"));
-            LogLevelCombo.Items.Add(CoreTools.Translate("3 - Information (less)"));
-            LogLevelCombo.Items.Add(CoreTools.Translate("4 - Information (more)"));
-            LogLevelCombo.Items.Add(CoreTools.Translate("5 - information (debug)"));
-            LogLevelCombo.SelectedIndex = 3;
+
+            if (Logger_LogType == Logger_LogType.UniGetUILog)
+            {
+                LogLevelCombo.Items.Clear();
+                LogLevelCombo.Items.Add(CoreTools.Translate("1 - Errors"));
+                LogLevelCombo.Items.Add(CoreTools.Translate("2 - Warnings"));
+                LogLevelCombo.Items.Add(CoreTools.Translate("3 - Information (less)"));
+                LogLevelCombo.Items.Add(CoreTools.Translate("4 - Information (more)"));
+                LogLevelCombo.Items.Add(CoreTools.Translate("5 - information (debug)"));
+                LogLevelCombo.SelectedIndex = 3;
+            } else if (Logger_LogType == Logger_LogType.ManagerLogs)
+            {
+                LogLevelCombo.Items.Clear();
+                foreach (PackageEngine.ManagerClasses.Manager.PackageManager manager in PEInterface.Managers)
+                {
+                    LogLevelCombo.Items.Add(manager.Name);
+                    LogLevelCombo.Items.Add($"{manager.Name} ({CoreTools.Translate("Verbose")})");
+                }
+                LogLevelCombo.SelectedIndex = 0;
+            }
+            else
+            {
+                LogLevelCombo.Items.Clear();
+                LogLevelCombo.Items.Add(CoreTools.Translate("Operation log"));
+                LogLevelCombo.SelectedIndex = 0;
+            }
         }
+
+        public void ReloadTriggered()
+        {
+            LoadLog();
+        }
+
+        public void SelectAllTriggered()
+        {
+            LogTextBox.SelectAll();
+        }
+
+        public void SearchTriggered()
+        { }
 
         public void SetText(string body)
         {
@@ -62,40 +86,45 @@ namespace UniGetUI.Interface.Pages
             {
                 if (line.Replace("\r", "").Replace("\n", "").Trim() == "")
                     continue;
-                paragraph.Inlines.Add(new Run() { Text = line.Replace("\r", "").Replace("\n", "") });
+                paragraph.Inlines.Add(new Run { Text = line.Replace("\r", "").Replace("\n", "") });
                 paragraph.Inlines.Add(new LineBreak());
             }
             LogTextBox.Blocks.Clear();
             LogTextBox.Blocks.Add(paragraph);
         }
 
+        // Dark theme colors
+        Color DARK_GREY = Color.FromArgb(255, 130, 130, 130);
+        Color DARK_LIGHT_GREY = Color.FromArgb(255, 190, 190, 190);
+        Color DARK_WHITE = Color.FromArgb(255, 250, 250, 250);
+        Color DARK_YELLOW = Color.FromArgb(255, 255, 255, 90);
+        Color DARK_RED = Color.FromArgb(255, 255, 80, 80);
+        Color DARK_GREEN = Color.FromArgb(255, 80, 255, 80);
+        Color DARK_BLUE = Color.FromArgb(255, 120, 120, 255);
+
+        // Light theme colors
+        Color LIGHT_GREY = Color.FromArgb(255, 125, 125, 225);
+        Color LIGHT_LIGHT_GREY = Color.FromArgb(255, 50, 50, 150);
+        Color LIGHT_WHITE = Color.FromArgb(255, 0, 0, 0);
+        Color LIGHT_YELLOW = Color.FromArgb(255, 150, 150, 0);
+        Color LIGHT_RED = Color.FromArgb(255, 205, 0, 0);
+        Color LIGHT_GREEN = Color.FromArgb(255, 0, 205, 0);
+        Color LIGHT_BLUE = Color.FromArgb(255, 0, 0, 205);
+
         public void LoadLog()
         {
 
 
+            bool IS_DARK = MainApp.Instance.ThemeListener.CurrentTheme == ApplicationTheme.Dark;
+            
             if (Logger_LogType == Logger_LogType.UniGetUILog)
             {
-                // Dark theme colors
-                Color DARK_GREY = Color.FromArgb(255, 130, 130, 130);
-                Color DARK_BLUE = Color.FromArgb(255, 190, 190, 190);
-                Color DARK_WHITE = Color.FromArgb(255, 250, 250, 250);
-                Color DARK_YELLOW = Color.FromArgb(255, 255, 255, 90);
-                Color DARK_RED = Color.FromArgb(255, 255, 80, 80);
 
-                // Light theme colors
-                Color LIGHT_GREY = Color.FromArgb(255, 125, 125, 225);
-                Color LIGHT_BLUE = Color.FromArgb(255, 50, 50, 150);
-                Color LIGHT_WHITE = Color.FromArgb(255, 0, 0, 0);
-                Color LIGHT_YELLOW = Color.FromArgb(255, 150, 150, 0);
-                Color LIGHT_RED = Color.FromArgb(255, 205, 0, 0);
-
-                bool IS_DARK = MainApp.Instance.ThemeListener.CurrentTheme == ApplicationTheme.Dark;
-
-                var logs = Logger.GetLogs();
+                LogEntry[] logs = Logger.GetLogs();
                 LogTextBox.Blocks.Clear();
-                foreach (var log_entry in logs)
+                foreach (LogEntry log_entry in logs)
                 {
-                    var p = new Paragraph();
+                    Paragraph p = new();
                     if (log_entry.Content == "")
                         continue;
 
@@ -114,45 +143,95 @@ namespace UniGetUI.Interface.Pages
                     switch (log_entry.Severity)
                     {
                         case LogEntry.SeverityLevel.Debug:
-                            color = new SolidColorBrush() { Color = IS_DARK? DARK_GREY: LIGHT_GREY };
+                            color = new SolidColorBrush { Color = IS_DARK ? DARK_GREY: LIGHT_GREY };
                             break;
                         case LogEntry.SeverityLevel.Info:
-                            color = new SolidColorBrush() { Color = IS_DARK ? DARK_BLUE : LIGHT_BLUE };
+                            color = new SolidColorBrush { Color = IS_DARK ? DARK_LIGHT_GREY : LIGHT_LIGHT_GREY };
                             break;
                         case LogEntry.SeverityLevel.Success:
-                            color = new SolidColorBrush() { Color = IS_DARK ? DARK_WHITE : LIGHT_WHITE};
+                            color = new SolidColorBrush { Color = IS_DARK ? DARK_WHITE : LIGHT_WHITE};
                             break;
                         case LogEntry.SeverityLevel.Warning:
-                            color = new SolidColorBrush() { Color = IS_DARK ? DARK_YELLOW : LIGHT_YELLOW };
+                            color = new SolidColorBrush { Color = IS_DARK ? DARK_YELLOW : LIGHT_YELLOW };
                             break;
                         case LogEntry.SeverityLevel.Error:
-                            color = new SolidColorBrush() { Color = IS_DARK ? DARK_RED : LIGHT_RED };
+                            color = new SolidColorBrush { Color = IS_DARK ? DARK_RED : LIGHT_RED };
                             break;
                         default:
-                            color = new SolidColorBrush() { Color = IS_DARK ? DARK_GREY : LIGHT_GREY };
+                            color = new SolidColorBrush { Color = IS_DARK ? DARK_GREY : LIGHT_GREY };
                             break;
                     }
 
-                    var lines = log_entry.Content.Split('\n');
-                    var date_length = -1;
-                    foreach(var line in lines)
+                    string[] lines = log_entry.Content.Split('\n');
+                    int date_length = -1;
+                    foreach(string line in lines)
                         if (date_length == -1)
                         {
-                            p.Inlines.Add(new Run() { Text = $"[{log_entry.Time}] {line}\n", Foreground = color });
+                            p.Inlines.Add(new Run { Text = $"[{log_entry.Time}] {line}\n", Foreground = color });
                             date_length = $"[{log_entry.Time}] ".Length;
                         }
                         else
                         {
-                            p.Inlines.Add(new Run() { Text = new string(' ', date_length) + line + "\n", Foreground = color });
+                            p.Inlines.Add(new Run { Text = new string(' ', date_length) + line + "\n", Foreground = color });
                         }
                     ((Run)p.Inlines[^1]).Text = ((Run)p.Inlines[^1]).Text.TrimEnd();
                     LogTextBox.Blocks.Add(p);
                 }
-                //SetText(text);
+                MainScroller.ScrollToVerticalOffset(MainScroller.ScrollableHeight);
             }
+
             else if (Logger_LogType == Logger_LogType.ManagerLogs)
             {
-                SetText(CoreData.ManagerLogs);
+                bool verbose = LogLevelCombo.SelectedValue?.ToString()?.Contains("(") ?? false;
+                foreach (PackageEngine.ManagerClasses.Manager.PackageManager manager in PEInterface.Managers)
+                    if (manager.Name.Contains(LogLevelCombo.SelectedValue?.ToString()?.Split(' ')[0] ?? "uncontained_word"))
+                    {
+                        PackageEngine.ManagerClasses.Classes.ManagerLogger TaskLogger = manager.TaskLogger;
+                        LogTextBox.Blocks.Clear();
+                        Paragraph versionParagraph = new();
+                        versionParagraph.Inlines.Add(new Run() { Text = $"Manager {manager.Name} with version:\n" });
+                        versionParagraph.Inlines.Add(new Run() { Text = manager.Status.Version });
+                        versionParagraph.Inlines.Add(new Run() { Text = $"\n\n——————————————————————————————————————————\n\n" });
+                        LogTextBox.Blocks.Add(versionParagraph);
+
+                        foreach (PackageEngine.ManagerClasses.Classes.TaskLogger operation in TaskLogger.Operations)
+                        {
+                            Paragraph p = new();
+                            foreach (string line in operation.AsColoredString(verbose))
+                            {
+                                Brush color;
+                                switch (line[0])
+                                {
+                                    case '0':
+                                        color = new SolidColorBrush { Color = IS_DARK ? DARK_WHITE : LIGHT_WHITE};
+                                        break;
+                                    case '1':
+                                        color = new SolidColorBrush { Color = IS_DARK ? DARK_LIGHT_GREY : LIGHT_LIGHT_GREY };
+                                        break;
+                                    case '2':
+                                        color = new SolidColorBrush { Color = IS_DARK ? DARK_RED : LIGHT_RED };
+                                        break;
+                                    case '3':
+                                        color = new SolidColorBrush { Color = IS_DARK ? DARK_BLUE : LIGHT_BLUE };
+                                        break;
+                                    case '4':
+                                        color = new SolidColorBrush { Color = IS_DARK ? DARK_GREEN : LIGHT_GREEN };
+                                        break;
+                                    case '5':
+                                        color = new SolidColorBrush { Color = IS_DARK ? DARK_YELLOW : LIGHT_YELLOW };
+                                        break;
+                                    default:
+                                        color = new SolidColorBrush { Color = IS_DARK ? DARK_YELLOW : LIGHT_YELLOW };
+                                        break;
+                                }
+                                p.Inlines.Add(new Run() { Text = line[1..] + "\n", Foreground = color });
+                            }
+                            ((Run)p.Inlines[^1]).Text = ((Run)p.Inlines[^1]).Text.TrimEnd();
+                            LogTextBox.Blocks.Add(p);
+                        }
+                        break;
+                    }
+                MainScroller.ScrollToVerticalOffset(MainScroller.ScrollableHeight);
             }
             else if (Logger_LogType == Logger_LogType.OperationHistory)
             {

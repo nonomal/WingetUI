@@ -1,16 +1,12 @@
 ﻿using Nancy;
 using Nancy.Hosting.Self;
-using System;
-using System.Drawing;
 using System.Text;
-using System.Threading.Tasks;
-using UniGetUI.Core;
 using UniGetUI.Core.Data;
-using UniGetUI.Core.IconEngine;
 using UniGetUI.Core.Logging;
 using UniGetUI.Core.SettingsEngine;
 using UniGetUI.Core.Tools;
 using UniGetUI.Interface.Enums;
+using UniGetUI.PackageEngine;
 using UniGetUI.PackageEngine.PackageClasses;
 
 namespace UniGetUI.Interface
@@ -22,8 +18,23 @@ namespace UniGetUI.Interface
 
     public class BackgroundApiRunner
     {
+        public event EventHandler<EventArgs>? OnOpenWindow;
+        public event EventHandler<EventArgs>? OnOpenUpdatesPage;
+        public event EventHandler<KeyValuePair<string, string>>? OnShowSharedPackage;
+        public event EventHandler<EventArgs>? OnUpgradeAll;
+        public event EventHandler<string>? OnUpgradeAllForManager;
+        public event EventHandler<string>? OnUpgradePackage;
 
         private bool __running = false;
+
+        public BackgroundApiRunner() {
+            BackgroundApi.OnOpenWindow += (s, e) => OnOpenWindow?.Invoke(s, e);
+            BackgroundApi.OnOpenUpdatesPage += (s, e) => OnOpenUpdatesPage?.Invoke(s, e);
+            BackgroundApi.OnShowSharedPackage += (s, e) => OnShowSharedPackage?.Invoke(s, e);
+            BackgroundApi.OnUpgradeAll += (s, e) => OnUpgradeAll?.Invoke(s, e);
+            BackgroundApi.OnUpgradeAllForManager += (s, e) => OnUpgradeAllForManager?.Invoke(s, e);
+            BackgroundApi.OnUpgradePackage += (s, e) => OnUpgradePackage?.Invoke(s, e);
+        }
 
         public static bool AuthenticateToken(string token)
         {
@@ -45,16 +56,15 @@ namespace UniGetUI.Interface
                     return;
                 }
 
-
                 ApiTokenHolder.Token = CoreTools.RandomString(64);
                 Settings.SetValue("CurrentSessionToken", ApiTokenHolder.Token);
-                Logger.Info("Api auth token: " + ApiTokenHolder.Token);
+                Logger.Info("Randomly-generated background API auth token for the current session: " + ApiTokenHolder.Token);
 
                 __running = true;
                 NancyHost host;
                 try
                 {
-                    host = new NancyHost(new HostConfiguration() { RewriteLocalhost = false, }, new Uri("http://localhost:7058/"));
+                    host = new NancyHost(new HostConfiguration { RewriteLocalhost = false, }, new Uri("http://localhost:7058/"));
                     host.Start();
                 }
                 catch
@@ -93,12 +103,15 @@ namespace UniGetUI.Interface
     /// </summary>
     public class BackgroundApi : NancyModule
     {
-
-        static Dictionary<string, string> PackageIconsPathReference = new();
+        public static event EventHandler<EventArgs>? OnOpenWindow;
+        public static event EventHandler<EventArgs>? OnOpenUpdatesPage;
+        public static event EventHandler<KeyValuePair<string, string>>? OnShowSharedPackage;
+        public static event EventHandler<EventArgs>? OnUpgradeAll;
+        public static event EventHandler<string>? OnUpgradeAllForManager;
+        public static event EventHandler<string>? OnUpgradePackage;
 
         public BackgroundApi()
         {
-
             // Enable CORS
             After.AddItemToEndOfPipeline((ctx) =>
             {
@@ -110,26 +123,20 @@ namespace UniGetUI.Interface
             BuildV1WidgetsApi();
         }
 
-
-
         /// <summary>
         /// Build the endpoints required for the Share Interface
         /// </summary>
         public void BuildShareApi()
         {
             // Show package from https://marticliment.com/unigetui/share
-            Get("/v2/show-package", async (parameters) =>
+            Get("/v2/show-package", (parameters) =>
             {
                 try
                 {
                     if (Request.Query.@pid == "" || Request.Query.@psource == "")
                         return 400;
 
-                    while (MainApp.Instance.MainWindow is null) await Task.Delay(100);
-                    while (MainApp.Instance.MainWindow.NavigationPage is null) await Task.Delay(100);
-                    while (MainApp.Instance.MainWindow.NavigationPage.DiscoverPage is null) await Task.Delay(100);
-
-                    MainApp.Instance.MainWindow.NavigationPage.DiscoverPage.ShowSharedPackage_ThreadSafe(Request.Query.@pid.ToString(), Request.Query.@psource.ToString());
+                    OnShowSharedPackage?.Invoke(this, new KeyValuePair<string, string>(Request.Query.@pid.ToString(), Request.Query.@psource.ToString()));
 
                     return "{\"status\": \"success\"}";
                 }
@@ -169,30 +176,32 @@ namespace UniGetUI.Interface
                 if (!BackgroundApiRunner.AuthenticateToken(Request.Query.@token))
                     return 401;
 
-                string packages = "";
-                foreach (Package package in MainApp.Instance.MainWindow.NavigationPage.UpdatesPage.Packages)
+                if (!PEInterface.UpgradablePackagesLoader.IsLoaded && !PEInterface.UpgradablePackagesLoader.IsLoading)
+                {
+                    _ = PEInterface.UpgradablePackagesLoader.ReloadPackages(); // Actually begin loading the updates if not loaded or loading
+                }
+
+                while (PEInterface.UpgradablePackagesLoader.IsLoading)
+                {
+                    await Task.Delay(500); // Wait for the updates to be reported before showing anything
+                }
+
+                StringBuilder packages = new();
+                foreach (Package package in PEInterface.UpgradablePackagesLoader.Packages)
                 {
                     if (package.Tag == PackageTag.OnQueue || package.Tag == PackageTag.BeingProcessed)
                         continue; // Do not show already processed packages on queue 
 
-                    string icon;
-                    string icon_path = (await package.GetIconUrl()).ToString();
-                    if (icon_path == "ms-appx:///Assets/Images/package_color.png")
-                    {
-                        icon = "https://marticliment.com/resources/widgets/package_color.png";
-                    }
-                    else
-                    {
-                        PackageIconsPathReference[package.Id] = Path.Join(CoreData.UniGetUICacheDirectory_Icons, package.Manager.Name, $"{package.Id}.{icon_path.Split('.')[^1]}");
-                        icon = $"http://localhost:7058/widgets/v2/get_icon_for_package?packageId={package.Id}&token={ApiTokenHolder.Token}";
-                    }
-                    packages += $"{package.Name.Replace('|', '-')}|{package.Id}|{package.Version}|{package.NewVersion}|{package.Source}|{package.Manager.Name}|{icon}&&";
+                    string icon = $"http://localhost:7058/widgets/v2/get_icon_for_package?packageId={package.Id}&packageSource={package.Source.Name}&token={ApiTokenHolder.Token}";
+                    packages.Append($"{package.Name.Replace('|', '-')}|{package.Id}|{package.Version}|{package.NewVersion}|{package.Source}|{package.Manager.Name}|{icon}&&");
                 }
 
-                if (packages.Length > 2)
-                    packages = packages[..(packages.Length - 2)];
+                string pkgs_ = packages.ToString();
 
-                return packages;
+                if (pkgs_.Length > 2)
+                    pkgs_ = pkgs_[..(pkgs_.Length - 2)];
+
+                return pkgs_;
             });
 
             // Open UniGetUI (as it was)
@@ -200,8 +209,8 @@ namespace UniGetUI.Interface
             {
                 if (!BackgroundApiRunner.AuthenticateToken(Request.Query.@token))
                     return 401;
-
-                MainApp.Instance.MainWindow.DispatcherQueue.TryEnqueue(() => { MainApp.Instance.MainWindow.Activate(); });
+                
+                OnOpenWindow?.Invoke(this, EventArgs.Empty);
                 return 200;
             });
 
@@ -211,11 +220,7 @@ namespace UniGetUI.Interface
                 if (!BackgroundApiRunner.AuthenticateToken(Request.Query.@token))
                     return 401;
 
-                MainApp.Instance.MainWindow.DispatcherQueue.TryEnqueue(() =>
-                {
-                    MainApp.Instance.MainWindow.NavigationPage.UpdatesNavButton.ForceClick();
-                    MainApp.Instance.MainWindow.Activate();
-                });
+                OnOpenUpdatesPage?.Invoke(this, EventArgs.Empty);
                 return 200;
             });
 
@@ -228,10 +233,7 @@ namespace UniGetUI.Interface
                 if (Request.Query.@id == "")
                     return 400;
 
-                MainApp.Instance.MainWindow.DispatcherQueue.TryEnqueue(() =>
-                {
-                    MainApp.Instance.MainWindow.NavigationPage.UpdatesPage.UpdatePackageForId(Request.Query.@id);
-                });
+                OnUpgradePackage?.Invoke(this, Request.Query.@id);
                 return 200;
             });
 
@@ -241,10 +243,8 @@ namespace UniGetUI.Interface
                 if (!BackgroundApiRunner.AuthenticateToken(Request.Query.@token))
                     return 401;
 
-                MainApp.Instance.MainWindow.DispatcherQueue.TryEnqueue(() =>
-                {
-                    MainApp.Instance.MainWindow.NavigationPage.UpdatesPage.UpdateAllPackages();
-                });
+                Logger.Info("[WIDGETS] Updating all packages");
+                OnUpgradeAll?.Invoke(this, EventArgs.Empty);    
                 return 200;
             });
 
@@ -257,14 +257,10 @@ namespace UniGetUI.Interface
                 if (Request.Query.@source == "")
                     return 400;
 
-                MainApp.Instance.MainWindow.DispatcherQueue.TryEnqueue(() =>
-                {
-                    MainApp.Instance.MainWindow.NavigationPage.UpdatesPage.UpdateAllPackagesForManager(Request.Query.@source);
-                });
+                    Logger.Info($"[WIDGETS] Updating all packages for manager {Request.Query.@source}");
+                OnUpgradeAllForManager?.Invoke(this, Request.Query.@source);
                 return 200;
             });
-
-
 
             // Update all packages for a specific manager
             Get("/widgets/v2/get_icon_for_package", async (parameters) =>
@@ -272,19 +268,27 @@ namespace UniGetUI.Interface
                 if (!BackgroundApiRunner.AuthenticateToken(Request.Query.@token))
                     return 401;
 
-                if (Request.Query.@packageId == "")
+                if (Request.Query.@packageId == "" || Request.Query.@packageSource == "")
                     return 400;
 
-                string path = "";
-                if (PackageIconsPathReference.ContainsKey(Request.Query.@packageId) && File.Exists(PackageIconsPathReference[Request.Query.@packageId]))
-                    path = PackageIconsPathReference[Request.Query.@packageId];
-                else
-                    path = Path.Join(CoreData.UniGetUIExecutableDirectory, "Assets", "Images", "package_color.png");
+                string iconPath = Path.Join(CoreData.UniGetUIExecutableDirectory, "Assets", "Images", "package_color.png");
+                Package? package = PEInterface.UpgradablePackagesLoader.GetPackageForId(Request.Query.@packageId, Request.Query.@packageSource);
+                if (package != null)
+                {
+                    Uri iconUrl = await package.GetIconUrl();
+                    if (iconUrl.ToString() != "ms-appx:///Assets/Images/package_color.png")
+                    {
+                        iconPath = Path.Join(CoreData.UniGetUICacheDirectory_Icons, package.Manager.Name, $"{package.Id}.{iconUrl.ToString().Split('.')[^1]}");
+                    }
+                    // else, the iconPath will be the preloaded one (package_color.png)
+                }
+                else 
+                    Logger.Warn($"[API] Package id={Request.Query.@packageId} with sourceName={Request.Query.@packageSource} was not found!");
 
-                byte[] fileContents = await File.ReadAllBytesAsync(path);
+                byte[] fileContents = await File.ReadAllBytesAsync(iconPath);
                 return new Response()
                 {
-                    ContentType = $"image/{path.Split('.')[^1]}",
+                    ContentType = $"image/{iconPath.Split('.')[^1]}",
                     Contents = (stream) =>
                     {
                         stream.Write(fileContents, 0, fileContents.Length);

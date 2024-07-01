@@ -1,8 +1,6 @@
 using CommunityToolkit.WinUI.Controls;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using UniGetUI.Core;
-using UniGetUI.Core.Logging;
 using UniGetUI.Core.Tools;
 
 // To learn more about WinUI, the WinUI project structure,
@@ -12,28 +10,28 @@ namespace UniGetUI.Interface.Widgets
 {
     public sealed class SettingsEntry : SettingsExpander
     {
-        private InfoBar infoBar;
-        private Button RestartButton;
+        private readonly InfoBar infoBar;
+        private readonly Button RestartButton;
         public string Text
         {
             get => (string)GetValue(TextProperty);
             set => SetValue(TextProperty, value);
         }
-        DependencyProperty TextProperty;
+        readonly DependencyProperty TextProperty;
 
         public string UnderText
         {
             get => (string)GetValue(UnderTextProperty);
             set => SetValue(UnderTextProperty, value);
         }
-        DependencyProperty UnderTextProperty;
+        readonly DependencyProperty UnderTextProperty;
 
         public string Icon
         {
             get => (string)GetValue(IconProperty);
             set => SetValue(IconProperty, value);
         }
-        DependencyProperty IconProperty;
+        readonly DependencyProperty IconProperty;
 
 
         public SettingsEntry()
@@ -73,7 +71,7 @@ namespace UniGetUI.Interface.Widgets
             RestartButton.HorizontalAlignment = HorizontalAlignment.Right;
             infoBar.ActionButton = RestartButton;
             RestartButton.Content = CoreTools.Translate("Restart WingetUI");
-            RestartButton.Click += (s, e) => { MainApp.Instance.RestartApp(); };
+            RestartButton.Click += (s, e) => { MainApp.Instance.KillAndRestart(); };
             ItemsHeader = infoBar;
 
             DefaultStyleKey = typeof(SettingsExpander);

@@ -1,12 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers
+﻿namespace UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers
 {
-    public class ManagerStatus
+    public struct ManagerStatus
     {
         public string Version = "";
         public bool Found = false;

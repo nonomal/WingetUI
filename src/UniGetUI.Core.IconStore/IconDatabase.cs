@@ -1,6 +1,4 @@
-﻿using System.ComponentModel;
-using System.Diagnostics;
-using System.Text.Json;
+﻿using System.Text.Json;
 using UniGetUI.Core.Data;
 using UniGetUI.Core.Logging;
 using UniGetUI.Core.SettingsEngine;
@@ -67,8 +65,9 @@ namespace UniGetUI.Core.IconEngine
                 if (Settings.Get("IconDataBaseURL"))
                     DownloadUrl = new Uri(Settings.GetValue("IconDataBaseURL"));
 
-                using (HttpClient client = new())
+                using (HttpClient client = new(CoreData.GenericHttpClientParameters))
                 {
+                    client.DefaultRequestHeaders.UserAgent.ParseAdd(CoreData.UserAgentString);
                     string fileContents = await client.GetStringAsync(DownloadUrl);
                     await File.WriteAllTextAsync(IconsAndScreenshotsFile, fileContents);
                 }

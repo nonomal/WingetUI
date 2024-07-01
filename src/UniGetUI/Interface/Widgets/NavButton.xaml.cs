@@ -1,10 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
-using System;
-using System.Linq;
-using UniGetUI.Core.Logging;
-using UniGetUI.Core;
 using UniGetUI.Core.Tools;
 
 // To learn more about WinUI, the WinUI project structure,
@@ -26,13 +22,13 @@ namespace UniGetUI.Interface.Widgets
             get => (string)GetValue(TextProperty);
             set => SetValue(TextProperty, value);
         }
-        DependencyProperty TextProperty;
+        readonly DependencyProperty TextProperty;
         public string Glyph
         {
             get => (string)GetValue(GlyphProperty);
             set => SetValue(GlyphProperty, value);
         }
-        DependencyProperty GlyphProperty;
+        readonly DependencyProperty GlyphProperty;
 
         public event EventHandler<NavButtonEventArgs>? Click;
 

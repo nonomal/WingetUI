@@ -7,6 +7,7 @@ using UniGetUI.Core.Tools;
 using UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers;
 using UniGetUI.PackageEngine.Enums;
 using UniGetUI.PackageEngine.ManagerClasses.Manager;
+using UniGetUI.PackageEngine.Managers.Chocolatey;
 using UniGetUI.PackageEngine.Managers.PowerShellManager;
 using UniGetUI.PackageEngine.PackageClasses;
 
@@ -55,10 +56,10 @@ namespace UniGetUI.PackageEngine.Managers.ChocolateyManager
             };
 
             SourceProvider = new ChocolateySourceProvider(this);
-            
+            PackageDetailsProvider = new ChocolateyDetailsProvider(this);
         }
         
-        protected override async Task<UpgradablePackage[]> GetAvailableUpdates_UnSafe()
+        protected override async Task<Package[]> GetAvailableUpdates_UnSafe()
         {
             Process p = new();
             p.StartInfo = new ProcessStartInfo()
@@ -73,13 +74,14 @@ namespace UniGetUI.PackageEngine.Managers.ChocolateyManager
                 StandardOutputEncoding = System.Text.Encoding.UTF8
             };
 
+            ManagerClasses.Classes.ProcessTaskLogger logger = TaskLogger.CreateNew(LoggableTaskType.ListUpdates, p);
             p.Start();
+
             string? line;
-            string output = "";
-            List<UpgradablePackage> Packages = new();
+            List<Package> Packages = new();
             while ((line = await p.StandardOutput.ReadLineAsync()) != null)
             {
-                output += line + "\n";
+                logger.AddToStdOut(line);
                 if (!line.StartsWith("Chocolatey"))
                 {
                     string[] elements = line.Split('|');
@@ -91,14 +93,13 @@ namespace UniGetUI.PackageEngine.Managers.ChocolateyManager
                     if (FALSE_PACKAGE_IDS.Contains(elements[0]) || FALSE_PACKAGE_VERSIONS.Contains(elements[1]) || elements[1] == elements[2])
                         continue;
 
-                    Packages.Add(new UpgradablePackage(CoreTools.FormatAsName(elements[0]), elements[0], elements[1], elements[2], DefaultSource, this));
+                    Packages.Add(new Package(CoreTools.FormatAsName(elements[0]), elements[0], elements[1], elements[2], DefaultSource, this));
                 }
             }
 
-            output += await p.StandardError.ReadToEndAsync();
-            LogOperation(p, output);
-
+            logger.AddToStdErr(await p.StandardError.ReadToEndAsync());
             await p.WaitForExitAsync();
+            logger.Close(p.ExitCode);
 
             return Packages.ToArray();
         }
@@ -118,13 +119,14 @@ namespace UniGetUI.PackageEngine.Managers.ChocolateyManager
                 StandardOutputEncoding = System.Text.Encoding.UTF8
             };
 
+            ManagerClasses.Classes.ProcessTaskLogger logger = TaskLogger.CreateNew(LoggableTaskType.ListPackages, p);
             p.Start();
+
             string? line;
-            string output = "";
             List<Package> Packages = new();
             while ((line = await p.StandardOutput.ReadLineAsync()) != null)
             {
-                output += line + "\n";
+                logger.AddToStdOut(line);
                 if (!line.StartsWith("Chocolatey"))
                 {
                     string[] elements = line.Split(' ');
@@ -140,10 +142,9 @@ namespace UniGetUI.PackageEngine.Managers.ChocolateyManager
                 }
             }
 
-            output += await p.StandardError.ReadToEndAsync();
-            LogOperation(p, output);
-
+            logger.AddToStdErr(await p.StandardError.ReadToEndAsync());
             await p.WaitForExitAsync();
+            logger.Close(p.ExitCode);
 
             return Packages.ToArray();
         }
@@ -328,10 +329,6 @@ namespace UniGetUI.PackageEngine.Managers.ChocolateyManager
                 }
             }
             Environment.SetEnvironmentVariable("chocolateyinstall", Path.GetDirectoryName(status.ExecutablePath), EnvironmentVariableTarget.Process);
-
-
-            if (status.Found && IsEnabled())
-                await RefreshPackageIndexes();
 
             return status;
         }

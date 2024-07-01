@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using UniGetUI.Core.Data;
-using UniGetUI.Core.IconEngine;
+﻿using UniGetUI.Core.IconEngine;
 using UniGetUI.Core.Logging;
 using UniGetUI.PackageEngine.Classes.Manager.Interfaces;
 using UniGetUI.PackageEngine.ManagerClasses.Manager;
@@ -21,16 +15,16 @@ namespace UniGetUI.PackageEngine.Classes.Manager.BaseProviders
             Manager = manager;
         }
 
-        public async Task<PackageDetails> GetPackageDetails(Package package)
+        public async Task GetPackageDetails(PackageDetails details)
         {
-            return await GetPackageDetails_Unsafe(package);
+            await GetPackageDetails_Unsafe(details);
         }
 
         public async Task<string[]> GetPackageVersions(Package package)
         {
             if (Manager.Capabilities.SupportsCustomVersions)
             {
-                var result = await GetPackageVersions_Unsafe(package);
+                string[] result = await GetPackageVersions_Unsafe(package);
                 Logger.Debug($"Found {result.Length} versions for package Id={package.Id} on manager {Manager.Name}");
                 return result;
             }
@@ -54,7 +48,7 @@ namespace UniGetUI.PackageEngine.Classes.Manager.BaseProviders
 
             if (Icon == null)
             {
-                var url = IconDatabase.Instance.GetIconUrlForId(package.GetIconId());
+                string url = IconDatabase.Instance.GetIconUrlForId(package.GetIconId());
                 if(url != "") Icon = new CacheableIcon(new Uri(url), package.Version);
             }
 
@@ -80,16 +74,16 @@ namespace UniGetUI.PackageEngine.Classes.Manager.BaseProviders
                 Logger.Debug($"Manager {Manager.Name} does not support native screenshots");
 
             if(URIs.Length == 0){
-                var UrlArray = IconDatabase.Instance.GetScreenshotsUrlForId(package.Id);
+                string[] UrlArray = IconDatabase.Instance.GetScreenshotsUrlForId(package.Id);
                 List<Uri> UriList = new();
-                foreach (var url in UrlArray) if (url != "") UriList.Add(new Uri(url));
+                foreach (string url in UrlArray) if (url != "") UriList.Add(new Uri(url));
                 URIs = UriList.ToArray();
             }
             Logger.Info($"Found {URIs.Length} screenshots for package Id={package.Id}");
             return URIs;
         }
 
-        protected abstract Task<PackageDetails> GetPackageDetails_Unsafe(Package package);
+        protected abstract Task GetPackageDetails_Unsafe(PackageDetails details);
         protected abstract Task<string[]> GetPackageVersions_Unsafe(Package package);
         protected abstract Task<CacheableIcon?> GetPackageIcon_Unsafe(Package package);
         protected abstract Task<Uri[]> GetPackageScreenshots_Unsafe(Package package);

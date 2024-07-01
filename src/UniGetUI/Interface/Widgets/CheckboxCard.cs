@@ -1,9 +1,6 @@
 using CommunityToolkit.WinUI.Controls;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using System;
-using UniGetUI.Core;
-using UniGetUI.Core.Logging;
 using UniGetUI.Core.SettingsEngine;
 using UniGetUI.Core.Tools;
 
@@ -31,7 +28,6 @@ namespace UniGetUI.Interface.Widgets
             set => SetValue(SettingProperty, value);
         }
 
-
         public bool Checked
         {
             get => _checkbox.IsChecked ?? false;
@@ -39,7 +35,7 @@ namespace UniGetUI.Interface.Widgets
 
         public event EventHandler<CheckBoxEventArgs>? StateChanged;
 
-        DependencyProperty SettingProperty;
+        readonly DependencyProperty SettingProperty;
 
         public string Text
         {
@@ -47,9 +43,9 @@ namespace UniGetUI.Interface.Widgets
             set => SetValue(TextProperty, value);
         }
 
-        DependencyProperty TextProperty;
+        readonly DependencyProperty TextProperty;
 
-        DependencyProperty IsCheckBoxChecked = DependencyProperty.Register(
+        readonly DependencyProperty IsCheckBoxChecked = DependencyProperty.Register(
         nameof(Checked),
         typeof(bool),
         typeof(CheckboxCard),

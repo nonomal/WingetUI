@@ -1,7 +1,5 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using UniGetUI.Core;
-using UniGetUI.Core.Logging;
 using UniGetUI.Core.Tools;
 
 // To learn more about WinUI, the WinUI project structure,
@@ -35,10 +33,10 @@ namespace UniGetUI.Interface.Widgets
             set => SetValue(TextWrappingProperty, value);
         }
 
-        DependencyProperty TextProperty;
-        DependencyProperty PrefixProperty;
-        DependencyProperty SuffixProperty;
-        DependencyProperty TextWrappingProperty;
+        readonly DependencyProperty TextProperty;
+        readonly DependencyProperty PrefixProperty;
+        readonly DependencyProperty SuffixProperty;
+        readonly DependencyProperty TextWrappingProperty;
 
         public TranslatedTextBlock()
         {

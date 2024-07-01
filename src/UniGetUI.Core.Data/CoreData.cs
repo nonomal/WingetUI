@@ -1,15 +1,24 @@
-﻿using System.Linq.Expressions;
-using System.Reflection.Metadata.Ecma335;
+﻿using System.Diagnostics;
+using System.Net;
 using UniGetUI.Core.Logging;
-using Windows.Storage.Search;
-using Windows.System.Diagnostics;
 
 namespace UniGetUI.Core.Data
 {
     public static class CoreData
     {
-        public static string VersionName =  "3.1.0-alpha0"; // Do not modify this line, use file scripts/apply_versions.py
-        public static double VersionNumber =  3.099; // Do not modify this line, use file scripts/apply_versions.py
+        public const string VersionName =  "3.1.0-beta1"; // Do not modify this line, use file scripts/apply_versions.py
+        public const double VersionNumber =  3.0993; // Do not modify this line, use file scripts/apply_versions.py
+
+        public const string UserAgentString = $"UniGetUI/{VersionName} (https://marticliment.com/unigetui/; contact@marticliment.com)";
+        public static HttpClientHandler GenericHttpClientParameters { 
+            get {
+                return new()
+                {
+                    AutomaticDecompression = DecompressionMethods.All,
+                    AllowAutoRedirect = true,
+                };
+            } 
+        }
 
         /// <summary>
         /// The directory where all the user data is stored. The directory is automatically created if it does not exist.
@@ -31,7 +40,7 @@ namespace UniGetUI.Core.Data
         {
             get
             {
-                var path = Path.Join(UniGetUIDataDirectory, "InstallationOptions");
+                string path = Path.Join(UniGetUIDataDirectory, "InstallationOptions");
                 if(!Directory.Exists(path)) Directory.CreateDirectory(path);
                 return path;
             }
@@ -147,14 +156,16 @@ namespace UniGetUI.Core.Data
         public static string UniGetUIExecutableFile
         {
             get {
-                string? filename = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                string? filename = Process.GetCurrentProcess().MainModule?.FileName;
                 if (filename != null)
-                    return filename;
+                    return filename.Replace(".dll", ".exe");
                 else
                     Logger.Error("System.Reflection.Assembly.GetExecutingAssembly().Location returned an empty path");
-                return Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "UiGetUI", "UniGetUI.exe");
+                return Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "UniGetUI", "UniGetUI.exe");
             }
         }
+
+        public static string GSudoPath = "";
 
 
         /// <summary>
@@ -168,9 +179,62 @@ namespace UniGetUI.Core.Data
         /// <returns>The path to an existing, valid directory</returns>
         private static string GetNewDataDirectoryOrMoveOld(string old_path, string new_path)
         {
-            if (Directory.Exists(new_path))
+            if (Directory.Exists(new_path) && !Directory.Exists(old_path))
                 return new_path;
-            else if (Directory.Exists(old_path))
+            else if (Directory.Exists(new_path) && Directory.Exists(old_path))
+            {
+                try
+                {
+                    foreach (string old_subdir in Directory.GetDirectories(old_path, "*", SearchOption.AllDirectories))
+                    {
+                        string new_subdir = old_subdir.Replace(old_path, new_path);
+                        if (!Directory.Exists(new_subdir))
+                        {
+                            Logger.Debug("New directory: " + new_subdir);
+                            Directory.CreateDirectory(new_subdir);
+                        }
+                        else
+                            Logger.Debug("Directory " + new_subdir + " already exists");
+                    }
+
+                    foreach (string old_file in Directory.GetFiles(old_path, "*", SearchOption.AllDirectories))
+                    {
+                        string new_file = old_file.Replace(old_path, new_path);
+                        if (!File.Exists(new_file))
+                        {
+                            Logger.Info("Copying " + old_file);
+                            File.Move(old_file, new_file);
+                        }
+                        else
+                        {
+                            Logger.Debug("File " + new_file + " already exists.");
+                            File.Delete(old_file);
+                        }
+                    }
+
+                    foreach (string old_subdir in Directory.GetDirectories(old_path, "*", SearchOption.AllDirectories).Reverse())
+                    {
+                        if (!Directory.EnumerateFiles(old_subdir).Any() && !Directory.EnumerateDirectories(old_subdir).Any())
+                        {
+                            Logger.Debug("Deleting old empty subdirectory " + old_subdir);
+                            Directory.Delete(old_subdir);
+                        }
+                    }
+
+                    if (!Directory.EnumerateFiles(old_path).Any() && !Directory.EnumerateDirectories(old_path).Any())
+                    {
+                        Logger.Info("Deleting old Chocolatey directory " + old_path);
+                        Directory.Delete(old_path);
+                    }
+                    return new_path;
+                }
+                catch (Exception e)
+                {
+                    Logger.Error(e);
+                    return new_path;
+                }
+            }
+            else if (/*Directory.Exists(new_path)*/Directory.Exists(old_path))
             {
                 try
                 {
@@ -191,11 +255,11 @@ namespace UniGetUI.Core.Data
                 {
                     Logger.Debug("Creating non-existing data directory at: " + new_path);
                     Directory.CreateDirectory(new_path);
-                    Task.Delay(100).Wait();
                     return new_path;
                 }
                 catch (Exception e)
                 {
+                    Logger.Error("Could not create new directory. You may perhaps need to disable Controlled Folder Access from Windows Settings or make an exception for UniGetUI.");
                     Logger.Error(e);
                     return new_path;
                 }
