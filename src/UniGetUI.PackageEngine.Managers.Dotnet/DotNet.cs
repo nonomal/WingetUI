@@ -1,300 +1,247 @@
-﻿using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Net.Http;
-using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using UniGetUI.Core;
-using UniGetUI.PackageEngine.Classes;
-using UniGetUI.PackageEngine.Enums;
-using UniGetUI.Core.Logging;
 using UniGetUI.Core.Tools;
-using UniGetUI.PackageEngine.Managers;
-using UniGetUI.PackageEngine.ManagerClasses.Manager;
+using UniGetUI.Interface.Enums;
+using UniGetUI.PackageEngine.Classes.Manager;
 using UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers;
-using UniGetUI.PackageEngine.PackageClasses;
+using UniGetUI.PackageEngine.Enums;
+using UniGetUI.PackageEngine.Interfaces;
+using UniGetUI.PackageEngine.ManagerClasses.Classes;
+using UniGetUI.PackageEngine.ManagerClasses.Manager;
+using UniGetUI.PackageEngine.Managers.Chocolatey;
 using UniGetUI.PackageEngine.Managers.PowerShellManager;
+using UniGetUI.PackageEngine.PackageClasses;
+using UniGetUI.PackageEngine.Structs;
+using Architecture = UniGetUI.PackageEngine.Enums.Architecture;
 
 namespace UniGetUI.PackageEngine.Managers.DotNetManager
 {
     public class DotNet : BaseNuGet
     {
-        new public static string[] FALSE_PACKAGE_NAMES = new string[] { "" };
-        new public static string[] FALSE_PACKAGE_IDS = new string[] { "" };
-        new public static string[] FALSE_PACKAGE_VERSIONS = new string[] { "" };
+        public static string[] FALSE_PACKAGE_IDS = [""];
+        public static string[] FALSE_PACKAGE_VERSIONS = [""];
 
-        public DotNet() : base()
+        public DotNet()
         {
-            Capabilities = new ManagerCapabilities()
+            Capabilities = new ManagerCapabilities
             {
                 CanRunAsAdmin = true,
+                CanDownloadInstaller = true,
+                SupportsReleaseNotes = true,
                 SupportsCustomScopes = true,
                 SupportsCustomArchitectures = true,
-                SupportedCustomArchitectures = new Architecture[] { Architecture.X86, Architecture.X64, Architecture.Arm64, Architecture.Arm },
+                SupportedCustomArchitectures =
+                [
+                    Architecture.x86,
+                    Architecture.x64,
+                    Architecture.arm64,
+                    Architecture.arm32,
+                ],
                 SupportsPreRelease = true,
+                CanListDependencies = true,
                 SupportsCustomLocations = true,
                 SupportsCustomPackageIcons = true,
                 SupportsCustomVersions = true,
+                SupportsProxy = ProxySupport.Partially,
+                SupportsProxyAuth = true,
+                KnowsPackageReleaseDate = PackageReleaseDateSupport.Yes,
             };
 
-            Properties = new ManagerProperties()
+            Properties = new ManagerProperties
             {
+                Id = "dotnet-tool",
                 Name = ".NET Tool",
-                Description = CoreTools.Translate("A repository full of tools and executables designed with Microsoft's .NET ecosystem in mind.<br>Contains: <b>.NET related tools and scripts</b>"),
-                IconId = "dotnet",
+                SetupGuide = "PACKAGE_MANAGERS.md#net-tool",
+                InstallCommands = new(Windows: "winget install --exact --id Microsoft.DotNet.SDK.10", MacOS: "brew install --cask dotnet-sdk"),
+                Description = CoreTools.Translate(
+                    "A repository full of tools and executables designed with Microsoft's .NET ecosystem in mind.<br>Contains: <b>.NET related tools and scripts</b>"
+                ),
+                IconId = IconType.DotNet,
                 ColorIconId = "dotnet_color",
                 ExecutableFriendlyName = "dotnet tool",
                 InstallVerb = "install",
                 UninstallVerb = "uninstall",
                 UpdateVerb = "update",
-                ExecutableCallArgs = "tool",
-                DefaultSource = new ManagerSource(this, "nuget.org", new Uri("https://www.nuget.org/api/v2")),
-                KnownSources = [new ManagerSource(this, "nuget.org", new Uri("https://www.nuget.org/api/v2"))],
+                DefaultSource = new ManagerSource(
+                    this,
+                    "nuget.org",
+                    new Uri("https://api.nuget.org/v3/index.json")
+                ),
+                KnownSources =
+                [
+                    new ManagerSource(
+                        this,
+                        "nuget.org",
+                        new Uri("https://api.nuget.org/v3/index.json")
+                    ),
+                ],
             };
+
+            DetailsHelper = new DotNetDetailsHelper(this);
+            OperationHelper = new DotNetPkgOperationHelper(this);
         }
 
-        protected override async Task<UpgradablePackage[]> GetAvailableUpdates_UnSafe()
-        {
-            var which_res = await CoreTools.Which("dotnet-tools-outdated.exe");
-            string path = which_res.Item2;
-            if (!which_res.Item1)
-            {
-                Process proc = new()
-                {
-                    StartInfo = new ProcessStartInfo()
-                    {
-                        FileName = path,
-                        Arguments = Properties.ExecutableCallArgs + " install --global dotnet-tools-outdated",
-                        UseShellExecute = true,
-                        CreateNoWindow = true,
-                    }
-                };
-                proc.Start();
-                await proc.WaitForExitAsync();
-                path = "dotnet-tools-outdated.exe";
-            }
+        protected override string? V3PackageType => "DotnetTool";
 
-            Process p = new()
+        protected override IReadOnlyList<Package> _getInstalledPackages_UnSafe()
+        {
+            List<Package> Packages = [];
+            foreach (
+                var options in new OverridenInstallationOptions[]
+                {
+                    new(PackageScope.Local),
+                    new(PackageScope.Global),
+                }
+            )
             {
-                StartInfo = new ProcessStartInfo()
+                using Process p = new()
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = Status.ExecutablePath,
+                        Arguments =
+                            Status.ExecutableCallArgs
+                            + " list"
+                            + (options.Scope == PackageScope.Global ? " --global" : ""),
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        StandardOutputEncoding = System.Text.Encoding.UTF8,
+                    },
+                };
+
+                IProcessTaskLogger logger = TaskLogger.CreateNew(
+                    LoggableTaskType.ListInstalledPackages,
+                    p
+                );
+                p.Start();
+
+                List<string> outputLines = [];
+                string? line;
+                while ((line = p.StandardOutput.ReadLine()) is not null)
+                {
+                    logger.AddToStdOut(line);
+                    outputLines.Add(line);
+                }
+                logger.AddToStdErr(p.StandardError.ReadToEnd());
+                p.WaitForExit();
+                logger.Close(p.ExitCode);
+
+                Packages.AddRange(ParseInstalledPackages(outputLines, DefaultSource, this, options));
+            }
+            return Packages;
+        }
+
+        public override IReadOnlyList<string> FindCandidateExecutableFiles() =>
+            CoreTools.WhichMultiple(OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+
+        protected override void _loadManagerExecutableFile(
+            out bool found,
+            out string path,
+            out string callArguments
+        )
+        {
+            var (_found, _path) = GetExecutableFile();
+            found = _found;
+            path = _path;
+            callArguments = "tool ";
+
+            // Ensure .NET SDK is installed
+            if (!found)
+                return;
+            var process = new Process()
+            {
+                StartInfo = new ProcessStartInfo
                 {
                     FileName = path,
-                    Arguments = "",
+                    Arguments = callArguments + "-h",
+                    UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
-                    UseShellExecute = false,
                     CreateNoWindow = true,
-                    StandardOutputEncoding = System.Text.Encoding.UTF8
-                }
+                    StandardOutputEncoding = System.Text.Encoding.UTF8,
+                },
             };
-
-            p.Start();
-
-            string? line;
-            bool DashesPassed = false;
-            List<UpgradablePackage> Packages = new();
-            string output = "";
-            while ((line = await p.StandardOutput.ReadLineAsync()) != null)
-            {
-                output += line + "\n";
-                if (!DashesPassed)
-                {
-                    if (line.Contains("----"))
-                        DashesPassed = true;
-                }
-                else
-                {
-                    string[] elements = Regex.Replace(line, " {2,}", " ").Split(' ');
-                    if (elements.Length < 3)
-                        continue;
-
-                    for (int i = 0; i < elements.Length; i++) elements[i] = elements[i].Trim();
-                    if (FALSE_PACKAGE_IDS.Contains(elements[0]) || FALSE_PACKAGE_VERSIONS.Contains(elements[1]))
-                        continue;
-
-                    Packages.Add(new UpgradablePackage(CoreTools.FormatAsName(elements[0]), elements[0], elements[1], elements[2], DefaultSource, this, PackageScope.Global));
-                }
-            }
-            output += await p.StandardError.ReadToEndAsync();
-            LogOperation(p, output);
-
-            return Packages.ToArray();
+            process.Start();
+            process.WaitForExit();
+            found = process.ExitCode is 0;
         }
 
-        protected override async Task<Package[]> GetInstalledPackages_UnSafe()
+        protected override void _loadManagerVersion(out string version)
         {
-            Process p = new()
+            var process = new Process()
             {
-                StartInfo = new ProcessStartInfo()
+                StartInfo = new ProcessStartInfo
                 {
                     FileName = Status.ExecutablePath,
-                    Arguments = Properties.ExecutableCallArgs + " list",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    StandardOutputEncoding = System.Text.Encoding.UTF8
-                }
-            };
-
-            p.Start();
-
-            string? line;
-            bool DashesPassed = false;
-            List<Package> Packages = new();
-            while ((line = await p.StandardOutput.ReadLineAsync()) != null)
-            {
-                if (!DashesPassed)
-                {
-                    if (line.Contains("----"))
-                        DashesPassed = true;
-                }
-                else
-                {
-                    string[] elements = Regex.Replace(line, " {2,}", " ").Split(' ');
-                    if (elements.Length < 2)
-                        continue;
-
-                    for (int i = 0; i < elements.Length; i++) elements[i] = elements[i].Trim();
-                    if (FALSE_PACKAGE_IDS.Contains(elements[0]) || FALSE_PACKAGE_VERSIONS.Contains(elements[1]))
-                        continue;
-
-                    Packages.Add(new Package(CoreTools.FormatAsName(elements[0]), elements[0], elements[1], DefaultSource, this, PackageScope.User));
-                }
-            }
-
-            p = new Process()
-            {
-                StartInfo = new ProcessStartInfo()
-                {
-                    FileName = Status.ExecutablePath,
-                    Arguments = Properties.ExecutableCallArgs + " list --global",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    StandardOutputEncoding = System.Text.Encoding.UTF8
-                }
-            };
-
-            p.Start();
-
-            DashesPassed = false;
-            string output = "";
-            while ((line = await p.StandardOutput.ReadLineAsync()) != null)
-            {
-                output += line + "\n";
-                if (!DashesPassed)
-                {
-                    if (line.Contains("----"))
-                        DashesPassed = true;
-                }
-                else
-                {
-                    string[] elements = Regex.Replace(line, " {2,}", " ").Split(' ');
-                    if (elements.Length < 2)
-                        continue;
-
-                    for (int i = 0; i < elements.Length; i++) elements[i] = elements[i].Trim();
-                    if (FALSE_PACKAGE_IDS.Contains(elements[0]) || FALSE_PACKAGE_VERSIONS.Contains(elements[1]))
-                        continue;
-
-                    Packages.Add(new Package(CoreTools.FormatAsName(elements[0]), elements[0], elements[1], DefaultSource, this, PackageScope.Global));
-                }
-            }
-            output += await p.StandardError.ReadToEndAsync();
-            LogOperation(p, output);
-
-            return Packages.ToArray();
-        }
-
-
-        public override OperationVeredict GetInstallOperationVeredict(Package package, InstallationOptions options, int ReturnCode, string[] Output)
-        {
-            return ReturnCode == 0 ? OperationVeredict.Succeeded : OperationVeredict.Failed;
-        }
-
-        public override OperationVeredict GetUpdateOperationVeredict(Package package, InstallationOptions options, int ReturnCode, string[] Output)
-        {
-            return ReturnCode == 0 ? OperationVeredict.Succeeded : OperationVeredict.Failed;
-        }
-
-        public override OperationVeredict GetUninstallOperationVeredict(Package package, InstallationOptions options, int ReturnCode, string[] Output)
-        {
-            return ReturnCode == 0 ? OperationVeredict.Succeeded : OperationVeredict.Failed;
-        }
-        public override string[] GetInstallParameters(Package package, InstallationOptions options)
-        {
-            string[] parameters = GetUpdateParameters(package, options);
-            parameters[0] = Properties.InstallVerb;
-            return parameters;
-        }
-        public override string[] GetUpdateParameters(Package package, InstallationOptions options)
-        {
-            List<string> parameters = GetUninstallParameters(package, options).ToList();
-            parameters[0] = Properties.UpdateVerb;
-
-            if (options.Architecture == Architecture.X86)
-                parameters.AddRange(new string[] { "--arch", "x86" });
-            else if (options.Architecture == Architecture.X64)
-                parameters.AddRange(new string[] { "--arch", "x64" });
-            else if (options.Architecture == Architecture.Arm)
-                parameters.AddRange(new string[] { "--arch", "arm32" });
-            else if (options.Architecture == Architecture.Arm64)
-                parameters.AddRange(new string[] { "--arch", "arm64" });
-
-            return parameters.ToArray();
-        }
-
-        public override string[] GetUninstallParameters(Package package, InstallationOptions options)
-        {
-            List<string> parameters = new() { Properties.UninstallVerb, package.Id };
-
-            if (options.CustomParameters != null)
-                parameters.AddRange(options.CustomParameters);
-
-            if (options.CustomInstallLocation != "")
-                parameters.AddRange(new string[] { "--tool-path", "\"" + options.CustomInstallLocation + "\"" });
-            else if (package.Scope == PackageScope.Global)
-                parameters.Add("--global");
-
-            return parameters.ToArray();
-        }
-
-        protected override async Task<ManagerStatus> LoadManager()
-        {
-            ManagerStatus status = new();
-
-            var which_res = await CoreTools.Which("dotnet.exe");
-            status.ExecutablePath = which_res.Item2;
-            status.Found = which_res.Item1;
-
-            if (!status.Found)
-                return status;
-
-            Process process = new()
-            {
-                StartInfo = new ProcessStartInfo()
-                {
-                    FileName = status.ExecutablePath,
                     Arguments = "--version",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     CreateNoWindow = true,
-                    StandardOutputEncoding = System.Text.Encoding.UTF8
-                }
+                    StandardOutputEncoding = System.Text.Encoding.UTF8,
+                },
             };
+
             process.Start();
-            status.Version = (await process.StandardOutput.ReadToEndAsync()).Trim();
+            version = process.StandardOutput.ReadToEnd().Trim();
+        }
 
-            if (status.Found && IsEnabled())
-                await RefreshPackageIndexes();
+        internal static IReadOnlyList<Package> ParseInstalledPackages(
+            IEnumerable<string> outputLines,
+            IManagerSource source,
+            IPackageManager manager,
+            OverridenInstallationOptions options
+        )
+        {
+            List<Package> packages = [];
+            bool dashesPassed = false;
 
-            return status;
+            foreach (string rawLine in outputLines)
+            {
+                if (!dashesPassed)
+                {
+                    if (rawLine.Contains("----"))
+                    {
+                        dashesPassed = true;
+                    }
+
+                    continue;
+                }
+
+                string[] elements = Regex.Replace(rawLine, " {2,}", " ").Split(' ');
+                if (elements.Length < 2)
+                {
+                    continue;
+                }
+
+                for (int i = 0; i < elements.Length; i++)
+                {
+                    elements[i] = elements[i].Trim();
+                }
+
+                if (
+                    FALSE_PACKAGE_IDS.Contains(elements[0])
+                    || FALSE_PACKAGE_VERSIONS.Contains(elements[1])
+                )
+                {
+                    continue;
+                }
+
+                packages.Add(
+                    new Package(
+                        CoreTools.FormatAsName(elements[0]),
+                        elements[0],
+                        elements[1],
+                        source,
+                        manager,
+                        options
+                    )
+                );
+            }
+
+            return packages;
         }
     }
 }

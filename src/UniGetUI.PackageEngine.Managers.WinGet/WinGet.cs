@@ -1,476 +1,1129 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices;
-using System.Threading.Tasks;
-using UniGetUI.Core;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Text;
 using UniGetUI.Core.Data;
-using UniGetUI.PackageEngine.Classes;
-using UniGetUI.PackageEngine.Enums;
 using UniGetUI.Core.Logging;
+using UniGetUI.Core.SettingsEngine;
 using UniGetUI.Core.Tools;
+using UniGetUI.Interface.Enums;
+using UniGetUI.PackageEngine.Classes.Manager;
+using UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers;
+using UniGetUI.PackageEngine.Enums;
+using UniGetUI.PackageEngine.ManagerClasses.Classes;
 using UniGetUI.PackageEngine.ManagerClasses.Manager;
 using UniGetUI.PackageEngine.PackageClasses;
-using UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers;
-using Windows.Graphics.Display;
-
+using WindowsPackageManager.Interop;
+using Architecture = UniGetUI.PackageEngine.Enums.Architecture;
 
 namespace UniGetUI.PackageEngine.Managers.WingetManager
 {
     public class WinGet : PackageManager
     {
-        new public static string[] FALSE_PACKAGE_NAMES = new string[] { "", "e(s)", "have", "the", "Id" };
-        new public static string[] FALSE_PACKAGE_IDS = new string[] { "", "e(s)", "have", "an", "'winget", "pin'", "have", "an", "Version" };
-        new public static string[] FALSE_PACKAGE_VERSIONS = new string[] { "", "have", "an", "'winget", "pin'", "have", "an", "Version" };
-        private LocalWingetSource LocalPcSource { get; set; }
-        private LocalWingetSource AndroidSubsystemSource { get; set; }
-        private LocalWingetSource SteamSource { get; set; }
-        private LocalWingetSource UbisoftConnectSource { get; set; }
-        private LocalWingetSource GOGSource { get; set; }
-        private LocalWingetSource MicrosoftStoreSource { get; set; }
+        // Add/Remove-programs identifiers legitimately contain spaces, for example
+        // "ARP\Machine\X86\Microsoft Copilot"; GetIdNamePiece quotes them.
+        public override bool IdentifiersAreQuotedOnCommandLine => true;
 
-        public WinGet(): base()
+        internal const string CliToolPreferenceEnvironmentVariable = "UNIGETUI_WINGET_CLI";
+        internal const string ComApiPolicyEnvironmentVariable = "UNIGETUI_WINGET_COM";
+        private const string SystemWinGetExecutableName = "winget.exe";
+        private const string PingetExecutableName = "pinget.exe";
+
+        public static string[] FALSE_PACKAGE_NAMES = ["", "e(s)", "have", "the", "Id"];
+        public static string[] FALSE_PACKAGE_IDS =
+        [
+            "",
+            "e(s)",
+            "have",
+            "an",
+            "'winget",
+            "pin'",
+            "have",
+            "an",
+            "Version",
+        ];
+        public static string[] FALSE_PACKAGE_VERSIONS =
+        [
+            "",
+            "have",
+            "an",
+            "'winget",
+            "pin'",
+            "have",
+            "an",
+            "Version",
+        ];
+        public LocalWinGetSource LocalPcSource { get; }
+        public LocalWinGetSource AndroidSubsystemSource { get; }
+        public LocalWinGetSource SteamSource { get; }
+        public LocalWinGetSource UbisoftConnectSource { get; }
+        public LocalWinGetSource GOGSource { get; }
+        public LocalWinGetSource MicrosoftStoreSource { get; }
+        public static bool NO_PACKAGES_HAVE_BEEN_LOADED { get; private set; }
+        internal WinGetCliToolKind SelectedCliToolKind { get; private set; } =
+            WinGetCliToolKind.SystemWinGet;
+
+        private static readonly TimeSpan VersionProbeTimeout = TimeSpan.FromSeconds(30);
+
+        private string? _pendingVersionOutput;
+
+        private string? _pendingVersionFailure;
+
+        // winget's local index isn't safe under concurrent process access: a `source update` (writer)
+        // running alongside list/upgrade/search (readers) yields partial or empty results. The COM
+        // backend serialized this implicitly; the CLI backends (winget.exe / pinget.exe) must do it
+        // explicitly. Reentrant (Monitor) so same-thread nested invocations don't self-deadlock.
+        private static readonly object _cliInvocationLock = new();
+
+        // Safety valve: never wait on the CLI lock longer than this, so a hung process can't freeze all WinGet queries.
+        private static readonly TimeSpan CliLockTimeout = TimeSpan.FromSeconds(120);
+
+        internal static IDisposable AcquireCliLock()
         {
-            Capabilities = new ManagerCapabilities()
+            bool taken = false;
+            Monitor.TryEnter(_cliInvocationLock, CliLockTimeout, ref taken);
+            if (!taken)
+                Logger.Warn("WinGet CLI lock not acquired within timeout; proceeding unserialized to avoid a hang.");
+            return new CliLockReleaser(taken);
+        }
+
+        private sealed class CliLockReleaser(bool taken) : IDisposable
+        {
+            private bool _released;
+            public void Dispose()
+            {
+                if (_released || !taken) return;
+                _released = true;
+                Monitor.Exit(_cliInvocationLock);
+            }
+        }
+
+        private static long _sourceIndexGeneration;
+
+        internal static long SourceIndexGeneration => Volatile.Read(ref _sourceIndexGeneration);
+
+        internal static void MarkSourceIndexRefreshed() =>
+            Interlocked.Increment(ref _sourceIndexGeneration);
+
+        public WinGet()
+        {
+            Capabilities = new ManagerCapabilities
             {
                 CanRunAsAdmin = true,
                 CanSkipIntegrityChecks = true,
                 CanRunInteractively = true,
                 SupportsCustomVersions = true,
+                CanDownloadInstaller = true,
+                SupportsReleaseNotes = true,
+                CanListDependencies = true,
                 SupportsCustomArchitectures = true,
-                SupportedCustomArchitectures = new Architecture[] { Architecture.X86, Architecture.X64, Architecture.Arm64 },
+                SupportedCustomArchitectures =
+                [
+                    Architecture.x86,
+                    Architecture.x64,
+                    Architecture.arm64,
+                ],
                 SupportsCustomScopes = true,
                 SupportsCustomLocations = true,
                 SupportsCustomSources = true,
                 SupportsCustomPackageIcons = true,
                 SupportsCustomPackageScreenshots = true,
-                Sources = new ManagerSource.Capabilities()
+                SupportsEmptySearchQuery = true,
+                Sources = new SourceCapabilities
                 {
                     KnowsPackageCount = false,
                     KnowsUpdateDate = true,
                     MustBeInstalledAsAdmin = true,
-                }
+                },
+                SupportsProxy = ProxySupport.Partially,
+                SupportsProxyAuth = false,
+                KnowsPackageReleaseDate = PackageReleaseDateSupport.Partial,
             };
 
-            Properties = new ManagerProperties()
+            Properties = new ManagerProperties
             {
+                Id = "winget",
                 Name = "Winget",
-                Description = CoreTools.Translate("Microsoft's official package manager. Full of well-known and verified packages<br>Contains: <b>General Software, Microsoft Store apps</b>"),
-                IconId = "winget",
+                SetupGuide = "PACKAGE_MANAGERS.md#winget",
+                DisplayName = "WinGet",
+                Description = CoreTools.Translate(
+                    "Microsoft's official package manager. Full of well-known and verified packages<br>Contains: <b>General Software, Microsoft Store apps</b>"
+                ),
+                IconId = IconType.WinGet,
                 ColorIconId = "winget_color",
                 ExecutableFriendlyName = "winget.exe",
                 InstallVerb = "install",
                 UninstallVerb = "uninstall",
                 UpdateVerb = "update",
-                ExecutableCallArgs = "",
-                KnownSources = [ new(this, "winget", new Uri("https://cdn.winget.microsoft.com/cache")),
-                                 new(this, "msstore", new Uri("https://storeedgefd.dsx.mp.microsoft.com/v9.0")) ],
-                DefaultSource = new(this, "winget", new Uri("https://cdn.winget.microsoft.com/cache"))
+                KnownSources =
+                [
+                    new ManagerSource(
+                        this,
+                        "winget",
+                        new Uri("https://cdn.winget.microsoft.com/cache")
+                    ),
+                    new ManagerSource(
+                        this,
+                        "winget-fonts",
+                        new Uri("https://cdn.winget.microsoft.com/fonts")
+                    ),
+                    new ManagerSource(
+                        this,
+                        "msstore",
+                        new Uri("https://storeedgefd.dsx.mp.microsoft.com/v9.0")
+                    ),
+                ],
+                DefaultSource = new ManagerSource(
+                    this,
+                    "winget",
+                    new Uri("https://cdn.winget.microsoft.com/cache")
+                ),
             };
 
-            SourceProvider = new WinGetSourceProvider(this);
-            PackageDetailsProvider = new WinGetPackageDetailsProvider(this);
+            SourcesHelper = new WinGetSourceHelper(this);
+            DetailsHelper = new WinGetPkgDetailsHelper(this);
+            OperationHelper = new WinGetPkgOperationHelper(this);
 
-            LocalPcSource = new LocalWingetSource(this, CoreTools.Translate("Local PC"), "localpc");
-            AndroidSubsystemSource = new(this, CoreTools.Translate("Android Subsystem"), "android");
-            SteamSource = new(this, "Steam", "steam");
-            UbisoftConnectSource = new(this, "Ubisoft Connect", "uplay");
-            GOGSource = new(this, "GOG", "gog");
-            MicrosoftStoreSource = new(this, "Microsoft Store", "msstore");
+            LocalPcSource = new LocalWinGetSource(
+                this,
+                CoreTools.Translate("Local PC"),
+                IconType.LocalPc,
+                LocalWinGetSource.Type_t.LocalPC
+            );
+            AndroidSubsystemSource = new(
+                this,
+                CoreTools.Translate("Android Subsystem"),
+                IconType.Android,
+                LocalWinGetSource.Type_t.Android
+            );
+            SteamSource = new(this, "Steam", IconType.Steam, LocalWinGetSource.Type_t.Steam);
+            UbisoftConnectSource = new(
+                this,
+                "Ubisoft Connect",
+                IconType.UPlay,
+                LocalWinGetSource.Type_t.Ubisoft
+            );
+            GOGSource = new(this, "GOG", IconType.GOG, LocalWinGetSource.Type_t.GOG);
+            MicrosoftStoreSource = new(
+                this,
+                "Microsoft Store",
+                IconType.MsStore,
+                LocalWinGetSource.Type_t.MicrosftStore
+            );
         }
 
-        protected override async Task<Package[]> FindPackages_UnSafe(string query)
+        public static string GetProxyArgument()
         {
-            return await WinGetHelper.Instance.FindPackages_UnSafe(this, query);
-        }
+            if (!Settings.Get(Settings.K.EnableProxy))
+                return "";
+            var proxyUri = Settings.GetProxyUrl();
+            if (proxyUri is null)
+                return "";
 
-        protected override async Task<UpgradablePackage[]> GetAvailableUpdates_UnSafe()
-        {
-            List<UpgradablePackage> Packages = new();
-
-            Process p = new();
-            p.StartInfo = new ProcessStartInfo()
+            if (Settings.Get(Settings.K.EnableProxyAuth))
             {
-                FileName = "powershell.exe",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                RedirectStandardInput = true,
-                CreateNoWindow = true,
-                StandardOutputEncoding = System.Text.Encoding.UTF8
-            };
-
-            p.Start();
-
-            await p.StandardInput.WriteAsync(@"
-                Set-ExecutionPolicy Bypass -Scope Process -Force
-                function Print-WinGetPackage {
-                    param (
-                        [Parameter(Mandatory,ValueFromPipelineByPropertyName)] [string] $Name,
-                        [Parameter(Mandatory,ValueFromPipelineByPropertyName)] [string] $Id,
-                        [Parameter(Mandatory,ValueFromPipelineByPropertyName)] [string] $InstalledVersion,
-                        [Parameter(ValueFromPipelineByPropertyName)] [string[]] $AvailableVersions,
-                        [Parameter(Mandatory,ValueFromPipelineByPropertyName)] [bool] $IsUpdateAvailable,
-                        [Parameter(ValueFromPipelineByPropertyName)] [string] $Source
-                    )
-                    process {
-                        if($IsUpdateAvailable)
-                        {
-                            Write-Output(""#"" + $Name + ""`t"" + $Id + ""`t"" + $InstalledVersion + ""`t"" + $AvailableVersions[0] + ""`t"" + $Source)
-                        }
-                    }
-                }
-
-                if(!(Get-Command -Verb Get -Noun WinGetPackage))
-                {
-                    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Confirm:$false
-                    Install-Module -Name Microsoft.WinGet.Client -Scope CurrentUser -AllowClobber -Confirm:$false -Force
-                }
-                Get-WinGetPackage | Print-WinGetPackage
-                
-
-                exit
-
-                ");
-
-            string? line;
-            string output = "";
-            while ((line = await p.StandardOutput.ReadLineAsync()) != null)
-            {
-                output += line + "\n";
-                if (!line.StartsWith("#"))
-                    continue; // The PowerShell script appends a '#' to the beginning of each line to identify the output
-
-                string[] elements = line.Split('\t');
-                if (elements.Length < 5)
-                    continue;
-
-                ManagerSource source = GetSourceOrDefault(elements[4]);
-
-                Packages.Add(new UpgradablePackage(elements[0][1..], elements[1], elements[2], elements[3], source, this));
+                Logger.Warn(
+                    "Proxy is enabled, but WinGet does not support proxy authentication, so the proxy setting will be ignored"
+                );
+                return "";
             }
-
-            output += await p.StandardError.ReadToEndAsync();
-            LogOperation(p, output);
-            await p.WaitForExitAsync();
-
-            return Packages.ToArray();
+            return $"--proxy {proxyUri.ToString().TrimEnd('/')}";
         }
 
-        protected override async Task<Package[]> GetInstalledPackages_UnSafe()
+        /// <summary>
+        /// Returns the set of installer URL hosts from the WinGet manifest for a specific
+        /// version of the given package, or null if it can't be resolved. Used for the
+        /// installer-host-change warning on the Updates page (issue #4617).
+        /// Returns a set (not a single host) so callers can do set-overlap comparison —
+        /// see PingetPackageDetailsProvider.TryGetInstallerHostsForVersion for rationale.
+        /// </summary>
+        public static IReadOnlySet<string>? TryGetInstallerHostsForVersion(
+            UniGetUI.PackageEngine.Interfaces.IPackage package,
+            string version
+        )
         {
-            List<Package> Packages = new();
-
-            Process p = new();
-            p.StartInfo = new ProcessStartInfo()
-            {
-                FileName = "powershell.exe",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                RedirectStandardInput = true,
-                CreateNoWindow = true,
-                StandardOutputEncoding = System.Text.Encoding.UTF8
-            };
-
-            p.Start();
-
-            await p.StandardInput.WriteAsync(@"
-                Set-ExecutionPolicy Bypass -Scope Process -Force
-                function Print-WinGetPackage {
-                    param (
-                        [Parameter(Mandatory,ValueFromPipelineByPropertyName)] [string] $Name,
-                        [Parameter(Mandatory,ValueFromPipelineByPropertyName)] [string] $Id,
-                        [Parameter(Mandatory,ValueFromPipelineByPropertyName)] [string] $InstalledVersion,
-                        [Parameter(ValueFromPipelineByPropertyName)] [string[]] $AvailableVersions,
-                        [Parameter(Mandatory,ValueFromPipelineByPropertyName)] [bool] $IsUpdateAvailable,
-                        [Parameter(ValueFromPipelineByPropertyName)] [string] $Source
-                    )
-                    process {
-                        Write-Output(""#"" + $Name + ""`t"" + $Id + ""`t"" + $InstalledVersion + ""`t"" + $Source)
-                    }
-                }
-
-                if(!(Get-Command -Verb Get -Noun WinGetPackage))
-                {
-                    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Confirm:$false
-                    Install-Module -Name Microsoft.WinGet.Client -Scope CurrentUser -AllowClobber -Confirm:$false -Force
-                }
-                Get-WinGetPackage | Print-WinGetPackage
-                
-                exit
-                ");
-
-            string? line;
-            string output = "";
-            while ((line = await p.StandardOutput.ReadLineAsync()) != null)
-            {
-                output += line + "\n";
-                if (!line.StartsWith("#"))
-                    continue; // The PowerShell script appends a '#' to the beginning of each line to identify the output
-
-                string[] elements = line.Split('\t');
-                if (elements.Length < 4)
-                    continue;
-
-                ManagerSource source;
-                if (elements[3] != "")
-                    source = GetSourceOrDefault(elements[3]);
-                else
-                    source = GetLocalSource(elements[1]);
-
-                Packages.Add(new Package(elements[0][1..], elements[1], elements[2], source, this));
-            }
-
-            output += await p.StandardError.ReadToEndAsync();
-            LogOperation(p, output);
-            await p.WaitForExitAsync();
-
-            return Packages.ToArray();
+            return PingetPackageDetailsProvider.TryGetInstallerHostsForVersion(package, version);
         }
 
-        private ManagerSource GetLocalSource(string id)
+        public static bool InstallerHostsAreTrusted(
+            UniGetUI.PackageEngine.Interfaces.IPackage package,
+            IReadOnlySet<string> hosts
+        )
+        {
+            return WinGetPkgOperationHelper.InstallerHostsAreTrusted(package, hosts);
+        }
+
+        public static IReadOnlyList<string>? TryGetInstallerUrls(
+            UniGetUI.PackageEngine.Interfaces.IPackage package,
+            string? version
+        )
+        {
+            return PingetPackageDetailsProvider.TryGetInstallerUrls(package, version);
+        }
+
+        public bool ReportedUpdateNotApplicable(
+            IReadOnlyList<string> processOutput,
+            int returnCode
+        )
+        {
+            return OperationHelper is WinGetPkgOperationHelper helper
+                && helper.ReportedUpdateNotApplicable(processOutput, returnCode);
+        }
+
+        public bool ReportedInstallerHashMismatch(int returnCode) =>
+            WinGetPkgOperationHelper.ReportedInstallerHashMismatch(returnCode);
+
+        public bool ReportedApplicationCurrentlyRunning(int returnCode) =>
+            WinGetPkgOperationHelper.ReportedApplicationCurrentlyRunning(returnCode);
+
+        public bool HonorsIntegrityCheckSkipWhenElevated =>
+            SelectedCliToolKind is WinGetCliToolKind.BundledPinget;
+
+        protected override IReadOnlyList<Package> FindPackages_UnSafe(string query)
+        {
+            return WinGetHelper.Instance.FindPackages_UnSafe(query);
+        }
+
+        protected override IReadOnlyList<Package> GetAvailableUpdates_UnSafe()
+        {
+            return WinGetHelper
+                .Instance.GetAvailableUpdates_UnSafe()
+                .Where(p => p.Id != "Chocolatey.Chocolatey")
+                .ToArray();
+        }
+
+        protected override IReadOnlyList<Package> GetInstalledPackages_UnSafe()
         {
             try
             {
-                // Check if source is android
-                bool AndroidValid = true;
-                foreach (char c in id)
-                    if (!"abcdefghijklmnopqrstuvwxyz.".Contains(c))
-                    {
-                        AndroidValid = false;
-                        break;
-                    }
-                if (AndroidValid && id.Count(x => x == '.') >= 2)
-                    return AndroidSubsystemSource;
+                var packages = WinGetHelper.Instance.GetInstalledPackages_UnSafe();
+                NO_PACKAGES_HAVE_BEEN_LOADED = false;
+                return packages;
+            }
+            catch (Exception)
+            {
+                NO_PACKAGES_HAVE_BEEN_LOADED = true;
+                throw;
+            }
+        }
 
-                // Check if source is Steam
-                if ((id == "Steam" || id.Contains("Steam App ")) && id.Split("Steam App").Count() >= 2 && id.Split("Steam App")[1].Trim().Count(x => !"1234567890".Contains(x)) == 0)
-                    return SteamSource;
+        public ManagerSource GetLocalSource(string id)
+        {
+            var IdPieces = id.Split('\\');
+            if (IdPieces[0] == "MSIX")
+            {
+                return MicrosoftStoreSource;
+            }
 
-                // Check if source is Ubisoft Connect
-                if (id == "Uplay" || id.Contains("Uplay Install ") && id.Split("Uplay Install").Count() >= 2 && id.Split("Uplay Install")[1].Trim().Count(x => !"1234567890".Contains(x)) == 0)
-                    return UbisoftConnectSource;
+            string MeaningfulId = IdPieces[^1];
 
-                // Check if source is GOG
-                if (id.EndsWith("_is1") && id.Split("_is1")[0].Count(x => !"1234567890".Contains(x)) == 0)
-                    return GOGSource;
-
-                // Check if source is Microsoft Store
-                if (id.Count(x => x == '_') == 1 && (id.Split('_')[^1].Length == 14 | id.Split('_')[^1].Length == 13))
-                    return MicrosoftStoreSource;
-
-                // Otherwise, Source is localpc
+            // Fast Local PC Check
+            if (MeaningfulId[0] == '{')
+            {
                 return LocalPcSource;
+            }
+
+            // Check if source is android
+            if (
+                MeaningfulId.Count(x => x == '.') >= 2
+                && MeaningfulId.All(c =>
+                    (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '…'
+                )
+            )
+            {
+                return AndroidSubsystemSource;
+            }
+
+            // Check if source is Steam
+            if (MeaningfulId == "Steam" || MeaningfulId.StartsWith("Steam App"))
+            {
+                return SteamSource;
+            }
+
+            // Check if source is Ubisoft Connect
+            if (MeaningfulId == "Uplay" || MeaningfulId.StartsWith("Uplay Install"))
+            {
+                return UbisoftConnectSource;
+            }
+
+            // Check if source is GOG
+            if (
+                MeaningfulId.EndsWith("_is1")
+                && MeaningfulId.Replace("_is1", "").All(c => (c >= '0' && c <= '9'))
+            )
+            {
+                return GOGSource;
+            }
+
+            // Otherwise they are Local PC
+            return LocalPcSource;
+        }
+
+        public override IReadOnlyList<string> FindCandidateExecutableFiles()
+        {
+            return FindCandidateExecutableFiles(
+                executableName => CoreTools.WhichMultiple(executableName),
+                File.Exists,
+                GetBundledPingetExecutablePath(),
+                GetCliToolPreference(),
+                () => SystemWinGetLocator.EnumerateOffPathExecutables(File.Exists)
+            );
+        }
+
+        internal static IReadOnlyList<string> FindCandidateExecutableFiles(
+            Func<string, IReadOnlyList<string>> findExecutables,
+            Func<string, bool> fileExists,
+            string bundledPingetPath,
+            WinGetCliToolPreference cliToolPreference = WinGetCliToolPreference.Default,
+            Func<IEnumerable<string>>? findOffPathSystemWinGetFiles = null
+        )
+        {
+            List<string> candidates = [];
+
+            if (cliToolPreference is not WinGetCliToolPreference.BundledPinget)
+            {
+                candidates.AddRange(findExecutables(SystemWinGetExecutableName));
+                candidates.AddRange(findOffPathSystemWinGetFiles?.Invoke() ?? []);
+            }
+
+            if (cliToolPreference is not WinGetCliToolPreference.SystemWinGet)
+            {
+                candidates.AddRange(
+                    FindPingetExecutableFiles(findExecutables, fileExists, bundledPingetPath)
+                );
+            }
+
+            return candidates.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
+        private static IEnumerable<string> FindPingetExecutableFiles(
+            Func<string, IReadOnlyList<string>> findExecutables,
+            Func<string, bool> fileExists,
+            string bundledPingetPath
+        )
+        {
+            if (fileExists(bundledPingetPath))
+            {
+                yield return bundledPingetPath;
+            }
+
+            foreach (string pingetExecutablePath in findExecutables(PingetExecutableName))
+            {
+                yield return pingetExecutablePath;
+            }
+        }
+
+        internal static string GetBundledPingetExecutablePath()
+        {
+            return GetBundledPingetExecutablePath(CoreData.UniGetUIExecutableDirectory, File.Exists);
+        }
+
+        internal static string GetBundledPingetExecutablePath(
+            string executableDirectory,
+            Func<string, bool> fileExists
+        )
+        {
+            string installDirectory = CoreData.ResolveInstallationDirectory(
+                executableDirectory,
+                fileExists,
+                static _ => false
+            );
+            string rootPingetPath = Path.Join(installDirectory, PingetExecutableName);
+            if (fileExists(rootPingetPath))
+            {
+                return rootPingetPath;
+            }
+
+            string avaloniaPingetPath = Path.Join(
+                installDirectory,
+                "Avalonia",
+                PingetExecutableName
+            );
+            return fileExists(avaloniaPingetPath) ? avaloniaPingetPath : rootPingetPath;
+        }
+
+        internal IWinGetManagerHelper CreateCliHelperForSelectedCliTool()
+        {
+            return CreateCliHelperForSelectedCliTool(Status.ExecutablePath);
+        }
+
+        internal IWinGetManagerHelper CreateCliHelperForSelectedCliTool(string executablePath)
+        {
+            return SelectedCliToolKind == WinGetCliToolKind.BundledPinget
+                ? new PingetCliHelper(this, executablePath)
+                : new WinGetCliHelper(this, executablePath);
+        }
+
+        private string ResolveLaunchableExecutableFile(string preferredPath, string callArguments)
+        {
+            var (resolvedPath, versionOutput, failureReason) = ResolveLaunchableExecutableFile(
+                preferredPath,
+                executablePath => TryReadExecutableVersion(executablePath, callArguments),
+                FindCandidateExecutableFiles
+            );
+
+            _pendingVersionOutput = versionOutput;
+            _pendingVersionFailure = failureReason;
+            return resolvedPath;
+        }
+
+        internal static (
+            string Path,
+            string? VersionOutput,
+            string? FailureReason
+        ) ResolveLaunchableExecutableFile(
+            string preferredPath,
+            Func<string, (bool Succeeded, string Output, string FailureReason)> readVersion,
+            Func<IReadOnlyList<string>> findCandidates
+        )
+        {
+            var (succeeded, output, failureReason) = readVersion(preferredPath);
+
+            if (succeeded)
+            {
+                return (preferredPath, output, null);
+            }
+
+            Logger.Warn(
+                $"The WinGet executable at {preferredPath} cannot be run ({failureReason}); looking for another usable executable..."
+            );
+
+            foreach (string candidate in findCandidates())
+            {
+                if (IsSameExecutablePath(candidate, preferredPath))
+                {
+                    continue;
+                }
+
+                var (candidateSucceeded, candidateOutput, candidateFailureReason) = readVersion(
+                    candidate
+                );
+
+                if (!candidateSucceeded)
+                {
+                    Logger.Warn(
+                        $"The WinGet executable at {candidate} cannot be run either ({candidateFailureReason})"
+                    );
+                    continue;
+                }
+
+                Logger.ImportantInfo(
+                    $"WinGet will use {candidate}, since {preferredPath} cannot be run on this machine"
+                );
+                return (candidate, candidateOutput, null);
+            }
+
+            Logger.Error("No usable WinGet executable could be found on this machine");
+            return (preferredPath, null, failureReason);
+        }
+
+        internal static (
+            bool Succeeded,
+            string Output,
+            string FailureReason
+        ) TryReadExecutableVersion(string executablePath, string callArguments)
+        {
+            Task<string>? stdout = null;
+            Task<string>? stderr = null;
+
+            try
+            {
+                using Process process = new()
+                {
+                    StartInfo = BuildVersionProcessStartInfo(executablePath, callArguments),
+                };
+
+                var budget = Stopwatch.StartNew();
+                process.Start();
+
+                stdout = process.StandardOutput.ReadToEndAsync();
+                stderr = process.StandardError.ReadToEndAsync();
+
+                if (!process.WaitForExit((int)VersionProbeTimeout.TotalMilliseconds))
+                {
+                    KillProcessTree(process, executablePath);
+                    return (false, "", "the process did not exit in time");
+                }
+
+                TimeSpan remaining = VersionProbeTimeout - budget.Elapsed;
+                if (
+                    !Task.WhenAll(stdout, stderr)
+                        .Wait(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero)
+                )
+                {
+                    KillProcessTree(process, executablePath);
+                    return (
+                        false,
+                        "",
+                        "the process exited but something it started still holds its output open"
+                    );
+                }
+
+                string output = stdout.GetAwaiter().GetResult().Trim();
+                string error = stderr.GetAwaiter().GetResult().Trim();
+
+                if (process.ExitCode != 0)
+                {
+                    return (
+                        false,
+                        "",
+                        error.Length > 0
+                            ? $"exit code {process.ExitCode}: {error}"
+                            : $"exit code {process.ExitCode}"
+                    );
+                }
+
+                if (output.Length == 0)
+                {
+                    return (false, "", "no version was reported");
+                }
+
+                if (error.Length > 0)
+                {
+                    Logger.Error("WinGet STDERR not empty: " + error);
+                }
+
+                return (true, output, "");
             }
             catch (Exception ex)
             {
-                Logger.Warn($"Could not parse local source for package {id}");
-                Logger.Warn(ex);
-                return LocalPcSource;
+                return (false, "", ex.Message);
+            }
+            finally
+            {
+                ObserveAbandonedRead(stdout);
+                ObserveAbandonedRead(stderr);
             }
         }
 
-        public override string[] GetInstallParameters(Package package, InstallationOptions options)
+        private static void KillProcessTree(Process process, string executablePath)
         {
-            List<string> parameters = GetUninstallParameters(package, options).ToList();
-            parameters[0] = Properties.InstallVerb;
-
-            parameters.Add("--accept-package-agreements");
-
-            if (options.SkipHashCheck)
-                parameters.Add("--ignore-security-hash");
-
-            if (options.CustomInstallLocation != "")
+            try
             {
-                parameters.Add("--location"); parameters.Add("\"" + options.CustomInstallLocation + "\"");
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
             }
-
-            switch (options.Architecture)
+            catch (Exception ex)
             {
-                case (null):
-                    break;
-                case (Architecture.X86):
-                    parameters.Add("--architecture"); parameters.Add("x86");
-                    break;
-                case (Architecture.X64):
-                    parameters.Add("--architecture"); parameters.Add("x64");
-                    break;
-                case (Architecture.Arm64):
-                    parameters.Add("--architecture"); parameters.Add("arm64");
-                    break;
+                Logger.Warn(
+                    $"Could not kill the unresponsive {executablePath} process: {ex.Message}"
+                );
             }
-            return parameters.ToArray();
-        }
-        public override string[] GetUpdateParameters(Package package, InstallationOptions options)
-        {
-            if (package.Name.Contains("64-bit") || package.Id.ToLower().Contains("x64"))
-                options.Architecture = Architecture.X64;
-            else if (package.Name.Contains("32-bit") || package.Id.ToLower().Contains("x86"))
-                options.Architecture = Architecture.X86;
-
-            string[] parameters = GetInstallParameters(package, options);
-            parameters[0] = Properties.UpdateVerb;
-            List<string> p = parameters.ToList();
-            p.Add("--force");
-            p.Add("--include-unknown");
-            parameters = p.ToArray();
-            return parameters;
         }
 
-        public override string[] GetUninstallParameters(Package package, InstallationOptions options)
+        private static void ObserveAbandonedRead(Task<string>? read)
         {
-            List<string> parameters = new() { Properties.UninstallVerb };
-            parameters.AddRange(new string[] { "--id", package.Id, "--exact" });
-            if(!package.Source.IsVirtualManager)
-                parameters.AddRange(new string[] { "--source", package.Source.Name });
-
-            parameters.Add("--accept-source-agreements");
-
-            switch (options.InstallationScope)
+            if (read is null)
             {
-                case (PackageScope.Local):
-                    parameters.Add("--scope"); parameters.Add("user");
-                    break;
-                case (PackageScope.Global):
-                    parameters.Add("--scope"); parameters.Add("machine");
-                    break;
+                return;
             }
 
-            if (options.Version != "")
-                parameters.AddRange(new string[] { "--version", options.Version, "--force" });
+            if (read.IsCompleted)
+            {
+                _ = read.Exception;
+                return;
+            }
 
-            if (options.InteractiveInstallation)
-                parameters.Add("--interactive");
+            read.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
+        }
+
+        private string ConsumePendingVersion()
+        {
+            string? output = _pendingVersionOutput;
+            string? failureReason = _pendingVersionFailure;
+            _pendingVersionOutput = null;
+            _pendingVersionFailure = null;
+
+            if (output is not null)
+            {
+                return output;
+            }
+
+            if (failureReason is null)
+            {
+                var (succeeded, probedOutput, probeFailureReason) = TryReadExecutableVersion(
+                    Status.ExecutablePath,
+                    Status.ExecutableCallArgs
+                );
+
+                if (succeeded)
+                {
+                    return probedOutput;
+                }
+
+                failureReason = probeFailureReason;
+            }
+
+            throw new InvalidOperationException(
+                $"The WinGet executable at {Status.ExecutablePath} cannot be run: {failureReason}"
+            );
+        }
+
+        private static ProcessStartInfo BuildVersionProcessStartInfo(
+            string executablePath,
+            string callArguments
+        )
+        {
+            ProcessStartInfo startInfo = new()
+            {
+                FileName = executablePath,
+                Arguments = callArguments + " --version",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
+            };
+
+            if (CoreTools.IsAdministrator())
+            {
+                AppPaths.RedirectTempToElevatedDirectory(startInfo);
+            }
+
+            return startInfo;
+        }
+
+        private static bool IsSameExecutablePath(string first, string second)
+        {
+            try
+            {
+                return Path.GetFullPath(first)
+                    .Equals(Path.GetFullPath(second), StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return first.Equals(second, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        protected override void _loadManagerExecutableFile(
+            out bool found,
+            out string path,
+            out string callArguments
+        )
+        {
+            var (_found, _path) = GetExecutableFile();
+            found = _found;
+            path = _path;
+            callArguments = "";
+            _pendingVersionOutput = null;
+            _pendingVersionFailure = null;
+
+            if (!found)
+            {
+                return;
+            }
+
+            if (!IsUserSelectedExecutablePath(path))
+            {
+                path = ResolveLaunchableExecutableFile(path, callArguments);
+            }
+
+            SelectedCliToolKind = GetCliToolKind(path);
+
+            if (SelectedCliToolKind == WinGetCliToolKind.BundledPinget)
+            {
+                Logger.Warn("Using Pinget CLI tool.");
+                WinGetHelper.Instance = new PingetCliHelper(this, path);
+                return;
+            }
+
+            WinGetComApiPolicy comApiPolicy = GetComApiPolicy();
+            if (!ShouldUseWinGetComApi(SelectedCliToolKind, comApiPolicy))
+            {
+                Logger.Warn("WinGet COM API usage is disabled; using WinGetCliHelper().");
+                WinGetHelper.Instance = new WinGetCliHelper(this, path);
+                return;
+            }
+
+            try
+            {
+                WinGetHelper.Instance = new NativeWinGetHelper(this);
+            }
+            catch (Exception ex)
+            {
+                if (
+                    ex is WinGetComActivationException activationEx
+                    && activationEx.IsExpectedFallbackCondition
+                )
+                {
+                    Logger.Warn(
+                        $"Native WinGet helper is unavailable on this machine ({activationEx.HResultHex}: {activationEx.Reason})"
+                    );
+                }
+                else
+                {
+                    Logger.Warn(
+                        $"Cannot instantiate Native WinGet Helper due to error: {ex.Message}"
+                    );
+                    Logger.Warn(ex);
+                }
+
+                Logger.Warn("WinGet will resort to using WinGetCliHelper()");
+                WinGetHelper.Instance = CreateCliHelperForSelectedCliTool(path);
+            }
+        }
+
+        internal static WinGetCliToolPreference GetCliToolPreference()
+        {
+            return GetCliToolPreference(
+                static name => Environment.GetEnvironmentVariable(name),
+                static key => Settings.GetValue(key)
+            );
+        }
+
+        internal static WinGetCliToolPreference GetCliToolPreference(
+            Func<string, string?> getEnvironmentVariable,
+            Func<Settings.K, string> getSettingValue
+        )
+        {
+            string? value = GetPolicyValue(
+                CliToolPreferenceEnvironmentVariable,
+                Settings.K.WinGetCliToolPreference,
+                getEnvironmentVariable,
+                getSettingValue
+            );
+
+            return ParseCliToolPreference(value) ?? WinGetCliToolPreference.Default;
+        }
+
+        internal static WinGetComApiPolicy GetComApiPolicy()
+        {
+            return GetComApiPolicy(
+                static name => Environment.GetEnvironmentVariable(name),
+                static key => Settings.GetValue(key)
+            );
+        }
+
+        internal static WinGetComApiPolicy GetComApiPolicy(
+            Func<string, string?> getEnvironmentVariable,
+            Func<Settings.K, string> getSettingValue
+        )
+        {
+            string? value = GetPolicyValue(
+                ComApiPolicyEnvironmentVariable,
+                Settings.K.WinGetComApiPolicy,
+                getEnvironmentVariable,
+                getSettingValue
+            );
+
+            return ParseComApiPolicy(value) ?? WinGetComApiPolicy.Default;
+        }
+
+        private static string? GetPolicyValue(
+            string environmentVariableName,
+            Settings.K settingKey,
+            Func<string, string?> getEnvironmentVariable,
+            Func<Settings.K, string> getSettingValue
+        )
+        {
+            string? environmentValue = getEnvironmentVariable(environmentVariableName);
+            if (!string.IsNullOrWhiteSpace(environmentValue))
+            {
+                return environmentValue;
+            }
+
+            string settingValue = getSettingValue(settingKey);
+            return string.IsNullOrWhiteSpace(settingValue) ? null : settingValue;
+        }
+
+        private static WinGetCliToolPreference? ParseCliToolPreference(string? value)
+        {
+            return NormalizeCliToolPreferenceValue(value) switch
+            {
+                "default" => WinGetCliToolPreference.Default,
+                "winget" => WinGetCliToolPreference.SystemWinGet,
+                "pinget" => WinGetCliToolPreference.BundledPinget,
+                _ => null,
+            };
+        }
+
+        private static string NormalizeCliToolPreferenceValue(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? "" : value.Trim().ToLowerInvariant();
+        }
+
+        private static WinGetComApiPolicy? ParseComApiPolicy(string? value)
+        {
+            return NormalizePolicyValue(value) switch
+            {
+                "default" => WinGetComApiPolicy.Default,
+                "enabled" or "enable" or "on" or "true" or "1" => WinGetComApiPolicy.Enabled,
+                "disabled" or "disable" or "off" or "false" or "0" => WinGetComApiPolicy.Disabled,
+                _ => null,
+            };
+        }
+
+        internal static bool ShouldUseWinGetComApi(
+            WinGetCliToolKind cliToolKind,
+            WinGetComApiPolicy comApiPolicy
+        )
+        {
+            return cliToolKind == WinGetCliToolKind.SystemWinGet
+                && comApiPolicy != WinGetComApiPolicy.Disabled;
+        }
+
+        private static string NormalizePolicyValue(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value)
+                ? ""
+                : value.Trim().Replace("-", "").Replace("_", "").ToLowerInvariant();
+        }
+
+        internal static WinGetCliToolKind GetCliToolKind(string executablePath)
+        {
+            return IsPingetExecutablePath(executablePath)
+                ? WinGetCliToolKind.BundledPinget
+                : WinGetCliToolKind.SystemWinGet;
+        }
+
+        private static bool IsPingetExecutablePath(string executablePath)
+        {
+            if (string.IsNullOrWhiteSpace(executablePath))
+            {
+                return false;
+            }
+
+            return Path.GetFileName(executablePath).Equals(
+                    PingetExecutableName,
+                    StringComparison.OrdinalIgnoreCase
+                )
+                || Path.GetFullPath(executablePath)
+                    .Equals(
+                        Path.GetFullPath(GetBundledPingetExecutablePath()),
+                        StringComparison.OrdinalIgnoreCase
+                    );
+        }
+
+        protected override void _loadManagerVersion(out string version)
+        {
+            bool usesCliHelper = WinGetHelper.Instance is WinGetCliHelper;
+            bool usesPingetHelper = WinGetHelper.Instance is PingetCliHelper;
+
+            string rawVersion = ConsumePendingVersion();
+
+            version = usesPingetHelper
+                ? $"Pinget CLI Version: {rawVersion}"
+                : $"System WinGet (CLI) Version: {rawVersion}";
+
+            if (usesPingetHelper)
+                version += "\nUsing Pinget CLI helper (JSON parsing)";
+            else if (usesCliHelper)
+                version += "\nUsing WinGet CLI helper (CLI parsing)";
             else
-                parameters.AddRange(new string[] { "--silent", "--disable-interactivity" });
+            {
+                version += "\nUsing Native WinGet helper (COM Api)";
 
-            return parameters.ToArray();
+                if (WinGetHelper.Instance is NativeWinGetHelper nativeHelper)
+                {
+                    version += $"\nActivation mode: {nativeHelper.ActivationMode}";
+                    version += $"\nActivation source: {nativeHelper.ActivationSource}";
+                }
+            }
         }
 
-        public override OperationVeredict GetInstallOperationVeredict(Package package, InstallationOptions options, int ReturnCode, string[] Output)
+        protected override void _performExtraLoadingSteps()
         {
-            string output_string = string.Join("\n", Output);
+            TryRepairTempFolderPermissions();
+        }
 
-            if (ReturnCode == -1978334967) // Use https://www.rapidtables.com/convert/number/hex-to-decimal.html for easy UInt(hex) to Int(dec) conversion
-                return OperationVeredict.Succeeded; // TODO: Needs restart
-            else if (ReturnCode == -1978335215)
-                return OperationVeredict.Failed; // TODO: Needs skip checksum
+        private void ReRegisterCOMServer()
+        {
+            WinGetHelper.Instance = new NativeWinGetHelper(this);
+            NativePackageHandler.Clear();
+        }
 
-            if (output_string.Contains("No applicable upgrade found") || output_string.Contains("No newer package versions are available from the configured sources"))
-                return OperationVeredict.Succeeded;
-
-            if (output_string.Contains("winget settings --enable InstallerHashOverride"))
+        public override void AttemptFastRepair()
+        {
+            try
             {
-                Logger.Info("Enabling skip hash ckeck for winget...");
-                Process p = new()
+                TryRepairTempFolderPermissions();
+                if (WinGetHelper.Instance is NativeWinGetHelper)
                 {
-                    StartInfo = new ProcessStartInfo()
+                    if (
+                        WinGetHelper.Instance is NativeWinGetHelper nativeHelper
+                        && nativeHelper.HasActiveLocalPackageQuery
+                    )
                     {
-                        // FileName = AppTools.GSudoPath,
-                        Arguments = Status.ExecutablePath + " " + Properties.ExecutableCallArgs + " settings --enable InstallerHashOverride",
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        CreateNoWindow = true,
-                        StandardOutputEncoding = System.Text.Encoding.UTF8
+                        Logger.Warn(
+                            "WinGet local package enumeration is still running; skipping COM reconnection so the retry can attach to the in-flight task."
+                        );
+                        return;
                     }
-                };
-                p.Start();
-                p.WaitForExit();
-                return OperationVeredict.AutoRetry;
-            }
 
-            return ReturnCode == 0 ? OperationVeredict.Succeeded : OperationVeredict.Failed;
-        }
-
-        public override OperationVeredict GetUpdateOperationVeredict(Package package, InstallationOptions options, int ReturnCode, string[] Output)
-        {
-            return GetInstallOperationVeredict(package, options, ReturnCode, Output);
-        }
-
-        public override OperationVeredict GetUninstallOperationVeredict(Package package, InstallationOptions options, int ReturnCode, string[] Output)
-        {
-            string output_string = string.Join("\n", Output);
-
-            if (output_string.Contains("1603") || output_string.Contains("0x80070005") || output_string.Contains("Access is denied"))
-            {
-                options.RunAsAdministrator = true;
-                return OperationVeredict.AutoRetry;
-            }
-
-            return ReturnCode == 0 ? OperationVeredict.Succeeded : OperationVeredict.Failed;
-        }
-
-        protected override async Task<ManagerStatus> LoadManager()
-        {
-            ManagerStatus status = new();
-
-            var which_res = await CoreTools.Which("winget.exe");
-            status.ExecutablePath = which_res.Item2;
-            status.Found = which_res.Item1;
-
-            if (!status.Found)
-                return status;
-
-            Process process = new()
-            {
-                StartInfo = new ProcessStartInfo()
+                    Logger.ImportantInfo("Attempting to reconnect to WinGet COM Server...");
+                    ReRegisterCOMServer();
+                    NO_PACKAGES_HAVE_BEEN_LOADED = false;
+                }
+                else
                 {
-                    FileName = status.ExecutablePath,
-                    Arguments = Properties.ExecutableCallArgs + " --version",
+                    Logger.Warn(
+                        "Attempted to reconnect to COM Server but the active backend is not native WinGet."
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("An error ocurred while attempting to reconnect to COM Server");
+                Logger.Error(ex);
+            }
+        }
+
+        private static void TryRepairTempFolderPermissions()
+        {
+            // if (Settings.Get(Settings.K.DisableNewWinGetTroubleshooter)) return;
+
+            try
+            {
+                string tempPath = Path.GetTempPath();
+                string winGetTempPath = Path.Combine(tempPath, "WinGet");
+
+                if (!Directory.Exists(winGetTempPath))
+                {
+                    Logger.Warn("WinGet temp folder does not exist, creating it...");
+                    Directory.CreateDirectory(winGetTempPath);
+                }
+
+                var directoryInfo = new DirectoryInfo(winGetTempPath);
+                var accessControl = directoryInfo.GetAccessControl();
+                var rules = accessControl.GetAccessRules(true, true, typeof(NTAccount));
+
+                bool userHasAccess = false;
+                string currentUser = WindowsIdentity.GetCurrent().Name;
+
+                foreach (FileSystemAccessRule rule in rules)
+                {
+                    if (
+                        rule.IdentityReference.Value.Equals(
+                            currentUser,
+                            StringComparison.CurrentCultureIgnoreCase
+                        )
+                    )
+                    {
+                        userHasAccess = true;
+                        break;
+                    }
+                }
+
+                if (!userHasAccess)
+                {
+                    Logger.Warn(
+                        "WinGet temp folder does not have correct permissions set, adding the current user..."
+                    );
+                    var rule = new FileSystemAccessRule(
+                        currentUser,
+                        FileSystemRights.FullControl,
+                        InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                        PropagationFlags.None,
+                        AccessControlType.Allow
+                    );
+
+                    accessControl.AddAccessRule(rule);
+                    directoryInfo.SetAccessControl(accessControl);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error(
+                    "An error occurred while attempting to properly configure WinGet's temp folder permissions."
+                );
+                Logger.Error(ex);
+            }
+        }
+
+        public override void RefreshPackageIndexes()
+        {
+            using var _cliLock = AcquireCliLock();
+            using Process p = new()
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = Status.ExecutablePath,
+                    Arguments =
+                        Status.ExecutableCallArgs
+                        + " source update"
+                        + (SelectedCliToolKind == WinGetCliToolKind.SystemWinGet
+                            ? " --disable-interactivity "
+                            : " ")
+                        + GetCliToolProxyArgument(),
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
+                    RedirectStandardInput = true,
                     CreateNoWindow = true,
-                    StandardOutputEncoding = System.Text.Encoding.UTF8
-                }
+                    StandardOutputEncoding = Encoding.UTF8,
+                },
             };
-            process.Start();
-            status.Version = "Naive WinGet CLI Version: " + (await process.StandardOutput.ReadToEndAsync()).Trim();
+
+            IProcessTaskLogger logger = TaskLogger.CreateNew(LoggableTaskType.RefreshIndexes, p);
+
+            if (CoreTools.IsAdministrator())
+            {
+                string WinGetTemp = AppPaths.RedirectTempToElevatedDirectory(p.StartInfo);
+                logger.AddToStdErr(
+                    $"[WARN] Redirecting %TEMP% folder to {WinGetTemp}, since UniGetUI was run as admin"
+                );
+            }
 
             try
             {
-                await Task.Run(() => WinGetHelper.Instance = new NativeWinGetHelper());
-                status.Version += "\nUsing Native WinGet helper (COM Api)";
+                p.Start();
+                logger.AddToStdOut(p.StandardOutput.ReadToEnd());
+                logger.AddToStdErr(p.StandardError.ReadToEnd());
+                logger.Close(p.ExitCode);
+                p.WaitForExit();
+                p.Close();
             }
-            catch (Exception ex)
+            finally
             {
-                Logger.Error("Cannot create native WinGet instance due to error: " + ex.ToString());
-                WinGetHelper.Instance = new BundledWinGetHelper();
-                status.Version += "\nUsing bundled WinGet helper (CLI parsing)";
+                MarkSourceIndexRefreshed();
             }
+        }
 
-            Status = status; // Need to set status before calling RefreshSources, otherwise will crash
-            if (status.Found && IsEnabled())
-                await RefreshPackageIndexes();
-
-            return status;
+        private string GetCliToolProxyArgument()
+        {
+            return SelectedCliToolKind == WinGetCliToolKind.SystemWinGet
+                ? GetProxyArgument()
+                : "";
         }
     }
 
-    internal class LocalWingetSource: ManagerSource
+    public class LocalWinGetSource : ManagerSource
     {
-        private string name;
-        private string __icon_id;
-        public override string IconId { get { return __icon_id; } }
-
-        public LocalWingetSource(WinGet manager, string name, string iconId) 
-            : base(manager, name, new Uri("https://microsoft.com/local-pc-source"), isVirtualManager: true)
+        public enum Type_t
         {
-            this.name = name;
-            __icon_id = iconId;
+            LocalPC,
+            MicrosftStore,
+            Steam,
+            GOG,
+            Android,
+            Ubisoft,
         }
 
-        public override string ToString()
+        public readonly Type_t Type;
+        private readonly string name;
+        private readonly IconType __icon_id;
+        public override IconType IconId
         {
-            return name;
+            get => __icon_id;
+        }
+
+        public LocalWinGetSource(WinGet manager, string name, IconType iconId, Type_t type)
+            : base(
+                manager,
+                name,
+                new Uri("https://microsoft.com/local-pc-source"),
+                isVirtualManager: true
+            )
+        {
+            Type = type;
+            this.name = name;
+            __icon_id = iconId;
+            AsString = Name;
+            AsString_DisplayName = Name;
         }
     }
 }
-
-
-
-

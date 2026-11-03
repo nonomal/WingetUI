@@ -1,47 +1,72 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using System;
 using System.Runtime.InteropServices;
-using Windows.Win32;
+using System.Runtime.Versioning;
 using Windows.Win32.System.Com;
 using WinRT;
 
 namespace WindowsPackageManager.Interop;
 
+[SupportedOSPlatform("windows5.0")]
 public class WindowsPackageManagerStandardFactory : WindowsPackageManagerFactory
 {
-    public WindowsPackageManagerStandardFactory(ClsidContext clsidContext = ClsidContext.Prod)
-        : base(clsidContext)
-    {
-    }
+    public WindowsPackageManagerStandardFactory(
+        ClsidContext clsidContext = ClsidContext.Prod,
+        bool allowLowerTrustRegistration = false
+    )
+        : base(clsidContext, allowLowerTrustRegistration) { }
 
     protected override T CreateInstance<T>(Guid clsid, Guid iid)
     {
-        nint pUnknown = IntPtr.Zero;
+        CLSCTX clsctx = CLSCTX.CLSCTX_LOCAL_SERVER;
+        if (_allowLowerTrustRegistration)
+        {
+            clsctx |= CLSCTX.CLSCTX_ALLOW_LOWER_TRUST_REGISTRATION;
+        }
+
+        int errorCode = CoCreateInstanceRaw(
+            in clsid,
+            IntPtr.Zero,
+            (uint)clsctx,
+            in iid,
+            out IntPtr instance
+        );
+
+        if (errorCode < 0)
+        {
+            throw new WinGetComActivationException(
+                clsid,
+                iid,
+                errorCode,
+                _allowLowerTrustRegistration
+            );
+        }
+
         try
         {
-            Windows.Win32.Foundation.HRESULT hr = PInvoke.CoCreateInstance(clsid, null, CLSCTX.CLSCTX_LOCAL_SERVER, iid, out object result);
-
-            //                     !! WARNING !!
-            // An exception may be thrown on the line below if UniGetUI
-            // runs as administrator or when WinGet is not installed on the
-            // system. It can be safely ignored if any of the conditions
-            // above are met.
-            Marshal.ThrowExceptionForHR(hr);
-
-
-            pUnknown = Marshal.GetIUnknownForObject(result);
-            return MarshalGeneric<T>.FromAbi(pUnknown);
+            return MarshalGeneric<T>.FromAbi(instance);
         }
         finally
         {
-            // CoCreateInstance and FromAbi both AddRef on the native object.
-            // Release once to prevent memory leak.
-            if (pUnknown != IntPtr.Zero)
+            if (instance != IntPtr.Zero)
             {
-                Marshal.Release(pUnknown);
+                Marshal.Release(instance);
             }
         }
     }
+
+    [DllImport(
+        "api-ms-win-core-com-l1-1-0.dll",
+        EntryPoint = "CoCreateInstance",
+        ExactSpelling = true,
+        PreserveSig = true
+    )]
+    private static extern int CoCreateInstanceRaw(
+        in Guid clsid,
+        IntPtr pUnkOuter,
+        uint dwClsContext,
+        in Guid iid,
+        out IntPtr instance
+    );
 }

@@ -1,274 +1,222 @@
-﻿using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using UniGetUI.Core;
-using UniGetUI.PackageEngine.Classes;
-using UniGetUI.PackageEngine.Enums;
+using System.Text;
+using UniGetUI.Core.Data;
 using UniGetUI.Core.Logging;
 using UniGetUI.Core.Tools;
-using UniGetUI.PackageEngine.ManagerClasses.Manager;
-using UniGetUI.PackageEngine.PackageClasses;
+using UniGetUI.Interface.Enums;
+using UniGetUI.PackageEngine.Classes.Manager;
 using UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers;
+using UniGetUI.PackageEngine.Enums;
+using UniGetUI.PackageEngine.ManagerClasses.Classes;
+using UniGetUI.PackageEngine.ManagerClasses.Manager;
+using UniGetUI.PackageEngine.Managers.Chocolatey;
+using UniGetUI.PackageEngine.PackageClasses;
 
 namespace UniGetUI.PackageEngine.Managers.PowerShellManager
 {
     public class PowerShell : BaseNuGet
     {
-        new public static string[] FALSE_PACKAGE_NAMES = new string[] { "" };
-        new public static string[] FALSE_PACKAGE_IDS = new string[] { "" };
-        new public static string[] FALSE_PACKAGE_VERSIONS = new string[] { "" };
+        public override bool CommandLineIsShellInterpreted => true;
 
-        public PowerShell() : base()
+        public PowerShell()
         {
-            Capabilities = new ManagerCapabilities()
+            Capabilities = new ManagerCapabilities
             {
                 CanRunAsAdmin = true,
                 CanSkipIntegrityChecks = true,
                 SupportsCustomVersions = true,
+                CanDownloadInstaller = true,
+                SupportsReleaseNotes = true,
                 SupportsCustomScopes = true,
+                // Update-Module/Uninstall-Module (PowerShellGet) take no -Scope; only Install-Module does
+                SupportsCustomScopesOnUpdate = false,
+                SupportsCustomScopesOnUninstall = false,
+                CanListDependencies = true,
                 SupportsCustomSources = true,
                 SupportsPreRelease = true,
                 SupportsCustomPackageIcons = true,
-                Sources = new ManagerSource.Capabilities()
+                Sources = new SourceCapabilities
                 {
                     KnowsPackageCount = false,
                     KnowsUpdateDate = false,
-                }
+                },
+                SupportsProxy = ProxySupport.Partially,
+                SupportsProxyAuth = true,
+                KnowsPackageReleaseDate = PackageReleaseDateSupport.Yes,
             };
 
-            Properties = new ManagerProperties()
+            Properties = new ManagerProperties
             {
+                Id = "winps",
                 Name = "PowerShell",
-                Description = CoreTools.Translate("PowerShell's package manager. Find libraries and scripts to expand PowerShell capabilities<br>Contains: <b>Modules, Scripts, Cmdlets</b>"),
-                IconId = "powershell",
+                SetupGuide = "PACKAGE_MANAGERS.md#powershell-5x",
+                DisplayName = "PowerShell 5.x",
+                Description = CoreTools.Translate(
+                    "PowerShell's package manager. Find libraries and scripts to expand PowerShell capabilities<br>Contains: <b>Modules, Scripts, Cmdlets</b>"
+                ),
+                IconId = IconType.PowerShell,
                 ColorIconId = "powershell_color",
                 ExecutableFriendlyName = "powershell.exe",
                 InstallVerb = "Install-Module",
                 UninstallVerb = "Uninstall-Module",
                 UpdateVerb = "Update-Module",
-                ExecutableCallArgs = " -NoProfile -Command",
-                KnownSources = [new(this, "PSGallery", new Uri("https://www.powershellgallery.com/api/v2")),
-                                new(this, "PoshTestGallery", new Uri("https://www.poshtestgallery.com/api/v2"))],
-                DefaultSource = new ManagerSource(this, "PSGallery", new Uri("https://www.powershellgallery.com/api/v2")),
+                KnownSources =
+                [
+                    new ManagerSource(
+                        this,
+                        "PSGallery",
+                        new Uri("https://www.powershellgallery.com/api/v2")
+                    ),
+                    new ManagerSource(
+                        this,
+                        "PoshTestGallery",
+                        new Uri("https://www.poshtestgallery.com/api/v2")
+                    ),
+                ],
+                DefaultSource = new ManagerSource(
+                    this,
+                    "PSGallery",
+                    new Uri("https://www.powershellgallery.com/api/v2")
+                ),
             };
 
-            SourceProvider = new PowerShellSourceProvider(this);
-        }
-        protected override async Task<UpgradablePackage[]> GetAvailableUpdates_UnSafe()
-        {
-            Process p = new();
-            p.StartInfo = new ProcessStartInfo()
-            {
-                FileName = Status.ExecutablePath,
-                Arguments = "",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                RedirectStandardInput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                StandardOutputEncoding = System.Text.Encoding.UTF8
-            };
-
-            p.Start();
-
-            await p.StandardInput.WriteLineAsync(@"
-                function Test-GalleryModuleUpdate {
-                    param (
-                        [Parameter(Mandatory,ValueFromPipelineByPropertyName)] [string] $Name,
-                        [Parameter(Mandatory,ValueFromPipelineByPropertyName)] [version] $Version,
-                        [Parameter(Mandatory,ValueFromPipelineByPropertyName)] [string] $Repository,
-                        [switch] $NeedUpdateOnly
-                    )
-                    process {
-                        $URLs = @{}
-                        @(Get-PSRepository).ForEach({$URLs[$_.Name] = $_.SourceLocation})
-                        $page = Invoke-WebRequest -Uri ($URLs[$Repository] + ""/package/$Name"") -UseBasicParsing -Maximum 0 -ea Ignore
-                        [version]$latest = Split-Path -Path ($page.Headers.Location -replace ""$Name."" -replace "".nupkg"") -Leaf
-                        $needsupdate = $Latest -gt $Version
-                        if ($needsupdate) {
-                                Write-Output($Name + ""|"" + $Version.ToString() + ""|"" + $Latest.ToString() + ""|"" + $Repository)
-                        }
-                    }
-                }
-                Get-InstalledModule | Test-GalleryModuleUpdate
-
-                exit
-                "); // do NOT remove the trailing endline
-            string? line;
-            List<UpgradablePackage> Packages = new();
-            string output = "";
-            while ((line = await p.StandardOutput.ReadLineAsync()) != null)
-            {
-                output += line + "\n";
-                if (line.StartsWith(">>"))
-                    continue;
-
-                string[] elements = line.Split('|');
-                if (elements.Length < 4)
-                    continue;
-
-                for (int i = 0; i < elements.Length; i++) elements[i] = elements[i].Trim();
-
-                if (elements[1] + ".0" == elements[2] || elements[1] + ".0.0" == elements[2])
-                    continue;
-
-                Packages.Add(new UpgradablePackage(Core.Tools.CoreTools.FormatAsName(elements[0]), elements[0], elements[1], elements[2], GetSourceOrDefault(elements[3]), this));
-            }
-
-            output += await p.StandardError.ReadToEndAsync();
-            LogOperation(p, output);
-            await p.WaitForExitAsync();
-
-            return Packages.ToArray();
+            DetailsHelper = new PowerShellDetailsHelper(this);
+            SourcesHelper = new PowerShellSourceHelper(this);
+            OperationHelper = new PowerShellPkgOperationHelper(this);
         }
 
-        protected override async Task<Package[]> GetInstalledPackages_UnSafe()
+        protected override IReadOnlyList<Package> _getInstalledPackages_UnSafe()
         {
-            Process p = new();
-            p.StartInfo = new ProcessStartInfo()
+            using Process p = new()
             {
-                FileName = Status.ExecutablePath,
-                Arguments = Properties.ExecutableCallArgs + " Get-InstalledModule",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                RedirectStandardInput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                StandardOutputEncoding = System.Text.Encoding.UTF8
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = Status.ExecutablePath,
+                    Arguments =
+                        Status.ExecutableCallArgs
+                        + " \"Get-InstalledModule | ForEach-Object { $_.Name + [char]9 + $_.Version + [char]9 + $_.Repository }\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    RedirectStandardInput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                },
             };
+
+            IProcessTaskLogger logger = TaskLogger.CreateNew(
+                LoggableTaskType.ListInstalledPackages,
+                p
+            );
 
             p.Start();
             string? line;
-            List<Package> Packages = new();
-            bool DashesPassed = false;
-            string output = "";
-            while ((line = await p.StandardOutput.ReadLineAsync()) != null)
+            List<string> outputLines = [];
+            while ((line = p.StandardOutput.ReadLine()) is not null)
             {
-                output += line + "\n";
-                if (!DashesPassed)
-                {
-                    if (line.Contains("-----"))
-                        DashesPassed = true;
-                }
-                else
-                {
-                    string[] elements = Regex.Replace(line, " {2,}", " ").Split(' ');
-                    if (elements.Length < 3)
-                        continue;
-
-                    for (int i = 0; i < elements.Length; i++) elements[i] = elements[i].Trim();
-
-                    Packages.Add(new Package(CoreTools.FormatAsName(elements[1]), elements[1], elements[0], GetSourceOrDefault(elements[2]), this));
-                }
+                logger.AddToStdOut(line);
+                outputLines.Add(line);
             }
 
-            output += await p.StandardError.ReadToEndAsync();
-            LogOperation(p, output);
-            await p.WaitForExitAsync();
+            logger.AddToStdErr(p.StandardError.ReadToEnd());
+            p.WaitForExit();
+            logger.Close(p.ExitCode);
 
-            return Packages.ToArray();
+            return ParseInstalledPackages(outputLines, this);
         }
 
-        public override OperationVeredict GetInstallOperationVeredict(Package package, InstallationOptions options, int ReturnCode, string[] Output)
+        protected override bool UseSubstringSearch => true;
+
+        public override List<string> FindCandidateExecutableFiles()
         {
-            return GetUninstallOperationVeredict(package, options, ReturnCode, Output);
+            var candidates = CoreTools.WhichMultiple("powershell.exe");
+            if (candidates.Count is 0)
+                candidates.Add(CoreData.PowerShell5);
+            return candidates;
         }
 
-        public override OperationVeredict GetUpdateOperationVeredict(Package package, InstallationOptions options, int ReturnCode, string[] Output)
+        protected override void _loadManagerExecutableFile(
+            out bool found,
+            out string path,
+            out string callArguments
+        )
         {
-            return GetUninstallOperationVeredict(package, options, ReturnCode, Output);
+            var (_found, _path) = GetExecutableFile();
+            found = _found;
+            path = _path;
+            callArguments = " -NoProfile -Command";
         }
 
-        public override OperationVeredict GetUninstallOperationVeredict(Package package, InstallationOptions options, int ReturnCode, string[] Output)
+        protected override IReadOnlyList<string> _getOperationCallArgs(
+            string executablePath,
+            string callArguments
+        )
         {
-            string output_string = string.Join("\n", Output);
-
-            if (output_string.Contains("AdminPrivilegesAreRequired") && !options.RunAsAdministrator)
+            // Degrade to the concatenated -Command form when the launcher cannot run: operations
+            // keep working exactly as they did before, and the parameter validation in
+            // BasePkgOperationHelper still rejects anything a shell could reinterpret.
+            string launcher = CoreData.PowerShellOperationLauncher;
+            if (!CoreTools.PowerShellLauncherWorks(executablePath, launcher))
             {
-                options.RunAsAdministrator = true;
-                return OperationVeredict.AutoRetry;
+                Logger.Warn(
+                    $"Not using the PowerShell operation launcher at {launcher}; falling back to -Command"
+                );
+                return [];
             }
 
-            return ReturnCode == 0 ? OperationVeredict.Succeeded : OperationVeredict.Failed;
-        }
-        public override string[] GetInstallParameters(Package package, InstallationOptions options)
-        {
-            List<string> parameters = GetUpdateParameters(package, options).ToList();
-            parameters[0] = Properties.InstallVerb;
-
-            parameters.AddRange(new string[] { "-AllowClobber" });
-            if (package.Scope == PackageScope.Global)
-                parameters.AddRange(new string[] { "-Scope", "AllUsers" });
-            else
-                parameters.AddRange(new string[] { "-Scope", "CurrentUser" });
-
-            if (options.Version != "")
-                parameters.AddRange(new string[] { "-RequiredVersion", options.Version });
-
-            return parameters.ToArray();
-
-        }
-        public override string[] GetUpdateParameters(Package package, InstallationOptions options)
-        {
-            List<string> parameters = GetUninstallParameters(package, options).ToList();
-            parameters[0] = Properties.UpdateVerb;
-
-            if (options.PreRelease)
-                parameters.Add("-AllowPrerelease");
-
-            if (options.SkipHashCheck)
-                parameters.Add("-SkipPublisherCheck");
-
-            return parameters.ToArray();
+            return ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", launcher, "tls12"];
         }
 
-        public override string[] GetUninstallParameters(Package package, InstallationOptions options)
+        protected override void _loadManagerVersion(out string version)
         {
-            List<string> parameters = new() { Properties.UninstallVerb, "-Name", package.Id, "-Confirm:$false", "-Force" };
-
-            if (options.CustomParameters != null)
-                parameters.AddRange(options.CustomParameters);
-
-            return parameters.ToArray();
-        }
-
-        protected override async Task<ManagerStatus> LoadManager()
-        {
-            ManagerStatus status = new()
+            using Process process = new()
             {
-                ExecutablePath = Path.Join(Environment.SystemDirectory, "windowspowershell\\v1.0\\powershell.exe")
-            };
-            status.Found = File.Exists(status.ExecutablePath);
-
-            if (!status.Found)
-                return status;
-
-            Process process = new()
-            {
-                StartInfo = new ProcessStartInfo()
+                StartInfo = new ProcessStartInfo
                 {
-                    FileName = status.ExecutablePath,
-                    Arguments = Properties.ExecutableCallArgs + " \"echo $PSVersionTable\"",
+                    FileName = Status.ExecutablePath,
+                    Arguments = Status.ExecutableCallArgs + " \"echo $PSVersionTable\"",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     CreateNoWindow = true,
-                    StandardOutputEncoding = System.Text.Encoding.UTF8
-                }
+                    StandardOutputEncoding = Encoding.UTF8,
+                },
             };
             process.Start();
-            status.Version = (await process.StandardOutput.ReadToEndAsync()).Trim();
-
-            if (status.Found && IsEnabled())
-                await RefreshPackageIndexes();
-
-            return status;
+            version = process.StandardOutput.ReadToEnd().Trim();
         }
-        
-    }
 
+        internal static IReadOnlyList<Package> ParseInstalledPackages(
+            IEnumerable<string> outputLines,
+            PowerShell manager
+        )
+        {
+            List<Package> packages = [];
+
+            foreach (string line in outputLines)
+            {
+                string[] elements = line.Split('\t');
+                if (elements.Length < 3)
+                    continue;
+
+                for (int i = 0; i < elements.Length; i++)
+                    elements[i] = elements[i].Trim();
+
+                if (elements[0].Length == 0)
+                    continue;
+
+                packages.Add(
+                    new Package(
+                        CoreTools.FormatAsName(elements[0]),
+                        elements[0],
+                        elements[1],
+                        manager.SourcesHelper.Factory.GetSourceOrDefault(elements[2]),
+                        manager
+                    )
+                );
+            }
+
+            return packages;
+        }
+    }
 }

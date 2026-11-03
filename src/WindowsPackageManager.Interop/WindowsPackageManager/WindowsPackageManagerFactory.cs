@@ -1,8 +1,7 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 using Microsoft.Management.Deployment;
-using System;
 
 namespace WindowsPackageManager.Interop;
 
@@ -14,10 +13,15 @@ namespace WindowsPackageManager.Interop;
 public abstract class WindowsPackageManagerFactory
 {
     private readonly ClsidContext _clsidContext;
+    protected readonly bool _allowLowerTrustRegistration;
 
-    public WindowsPackageManagerFactory(ClsidContext clsidContext)
+    public WindowsPackageManagerFactory(
+        ClsidContext clsidContext,
+        bool allowLowerTrustRegistration = false
+    )
     {
         _clsidContext = clsidContext;
+        _allowLowerTrustRegistration = allowLowerTrustRegistration;
     }
 
     /// <summary>
@@ -34,7 +38,8 @@ public abstract class WindowsPackageManagerFactory
 
     public FindPackagesOptions CreateFindPackagesOptions() => CreateInstance<FindPackagesOptions>();
 
-    public CreateCompositePackageCatalogOptions CreateCreateCompositePackageCatalogOptions() => CreateInstance<CreateCompositePackageCatalogOptions>();
+    public CreateCompositePackageCatalogOptions CreateCreateCompositePackageCatalogOptions() =>
+        CreateInstance<CreateCompositePackageCatalogOptions>();
 
     public InstallOptions CreateInstallOptions() => CreateInstance<InstallOptions>();
 

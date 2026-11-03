@@ -1,298 +1,235 @@
-﻿using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.ComponentModel;
-using System.IO;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Threading.Tasks;
-using UniGetUI.Core.Data;
+using UniGetUI.Core.Classes;
+using UniGetUI.Core.IconEngine;
+using UniGetUI.Core.Logging;
 using UniGetUI.Core.Tools;
 using UniGetUI.Interface.Enums;
-using UniGetUI.Core.Logging;
-using UniGetUI.Core.IconEngine;
-using UniGetUI.PackageEngine.Enums;
-using UniGetUI.PackageEngine.ManagerClasses.Manager;
 using UniGetUI.PackageEngine.Classes.Packages;
-using UniGetUI.PackageEngine.Classes.Manager.ManagerHelpers;
-using Windows.UI.Composition;
+using UniGetUI.PackageEngine.Classes.Packages.Classes;
+using UniGetUI.PackageEngine.Classes.Serializable;
+using UniGetUI.PackageEngine.Interfaces;
+using UniGetUI.PackageEngine.PackageLoader;
+using UniGetUI.PackageEngine.Serializable;
+using UniGetUI.PackageEngine.Structs;
 
 namespace UniGetUI.PackageEngine.PackageClasses
 {
-    public class Package : INotifyPropertyChanged
+    public partial class Package : IPackage
     {
         // Internal properties
-        private bool __is_checked = false;
+        private bool __is_checked;
         public event PropertyChangedEventHandler? PropertyChanged;
-        private string __listed_icon_id = "";
-        private string __name_tooltip = "";
         private PackageTag __tag;
-        private float __opacity = 1;
-        private bool __show_icon_highlight = false;
-        private string __hash = "";
 
-        public int NewVersionLabelWidth { get { return IsUpgradable? 125: 0; } }
-        public int NewVersionIconWidth { get { return IsUpgradable? 24: 0; } }
+        private readonly long _hash;
+        private readonly long _versionedHash;
+        private readonly string _ignoredId;
+        private readonly string _iconId;
+
+        private static readonly ConcurrentDictionary<long, Uri> _cachedIconPaths = new();
+        private static readonly ConcurrentDictionary<long, long> _failedIconLookups = new();
+        private static readonly TimeSpan _iconLookupRetryInterval = TimeSpan.FromMinutes(5);
+
+        public static TimeSpan? TEST_IconLookupRetryIntervalOverride { private get; set; }
+
+        private static TimeSpan IconLookupRetryInterval =>
+            TEST_IconLookupRetryIntervalOverride ?? _iconLookupRetryInterval;
+
+        private IPackageDetails? __details;
+        public IPackageDetails Details
+        {
+            get => __details ??= new PackageDetails(this);
+        }
 
         public PackageTag Tag
         {
-            get { return __tag; }
-
+            get => __tag;
             set
             {
                 __tag = value;
-                switch (__tag)
-                {
-                    case PackageTag.Default:
-                        ListedIconId = "install";
-                        ListIconShowHighlight = false;
-                        ListedOpacity = 1;
-                        ListedNameTooltip = Name;
-                        break;
-
-                    case PackageTag.AlreadyInstalled:
-                        ListedIconId = "installed";
-                        ListIconShowHighlight = true;
-                        ListedOpacity = 1;
-                        ListedNameTooltip = CoreTools.Translate("This package is already installed") + " - " + Name;
-                        break;
-
-                    case PackageTag.IsUpgradable:
-                        ListedIconId = "update";
-                        ListIconShowHighlight = true;
-                        ListedOpacity = 1;
-                        ListedNameTooltip = CoreTools.Translate("This package can be updated") + " - " + Name;
-                        break;
-
-                    case PackageTag.Pinned:
-                        ListedIconId = "pin_fill";
-                        ListIconShowHighlight = false;
-                        ListedOpacity = 1;
-                        ListedNameTooltip = CoreTools.Translate("Updates for this package are ignored") + " - " + Name;
-                        break;
-
-                    case PackageTag.OnQueue:
-                        ListedIconId = "sandclock";
-                        ListIconShowHighlight = false;
-                        ListedOpacity = .5F;
-                        ListedNameTooltip = CoreTools.Translate("This package is on the queue") + " - " + Name;
-                        break;
-
-                    case PackageTag.BeingProcessed:
-                        ListedIconId = "gears";
-                        ListIconShowHighlight = false;
-                        ListedOpacity = .5F;
-                        ListedNameTooltip = CoreTools.Translate("This package is being processed") + " - " + Name;
-                        break;
-
-                    case PackageTag.Failed:
-                        ListedIconId = "stop";
-                        ListIconShowHighlight = true;
-                        ListedOpacity = 1;
-                        ListedNameTooltip = CoreTools.Translate("An error occurred while processing this package") + " - " + Name;
-                        break;
-                }
+                OnPropertyChanged();
             }
-        }
-
-        // Public properties
-        public bool ListIconShowHighlight
-        {
-            get { return __show_icon_highlight; }
-            set { __show_icon_highlight = value; OnPropertyChanged(); }
         }
 
         public bool IsChecked
         {
-            get { return __is_checked; }
-            set { __is_checked = value; OnPropertyChanged(); }
-        }
-
-        public string ListedIconId
-        {
-            set { __listed_icon_id = value; OnPropertyChanged(); }
-            get { return __listed_icon_id; }
-        }
-
-        public string ListedNameTooltip
-        {
-            get { return __name_tooltip; }
-            set { __name_tooltip = value; OnPropertyChanged(); }
-        }
-
-        public float ListedOpacity
-        {
-            get { return __opacity; }
-            set { __opacity = value; OnPropertyChanged(); }
-        }
-
-        public string IsCheckedAsString { get { return IsChecked ? "True" : "False"; } }
-        public string Name { get; }
-        public string Id { get; set; }
-        public string Version { get; }
-        public float VersionAsFloat { get; }
-        public ManagerSource Source { get; set; }
-        public PackageManager Manager { get; }
-        public string UniqueId { get; }
-        public string NewVersion { get; set; }
-        public virtual bool IsUpgradable { get; } = false;
-        public PackageScope Scope { get; set; }
-        public string SourceAsString
-        {
-            get
+            get => __is_checked;
+            set
             {
-                if (Source != null) return Source.ToString();
-                else return "";
+                __is_checked = value;
+                OnPropertyChanged();
             }
         }
 
+        private OverridenInstallationOptions _overridenOptions;
+        public ref OverridenInstallationOptions OverridenOptions
+        {
+            get => ref _overridenOptions;
+        }
+        public string Name { get; }
+        public string AutomationName { get; }
+        public string Id { get; }
+        public virtual string VersionString { get; }
+
+        public virtual bool HasConcreteVersion => true;
+        public bool InstalledVersionIsUnverified { get; init; }
+        public CoreTools.Version NormalizedVersion { get; }
+        public CoreTools.Version NormalizedNewVersion { get; }
+        public bool IsPopulated { get; set; }
+        public IManagerSource Source { get; }
+
         /// <summary>
-        /// Constuct a package with a given name, id, version, source and manager, and an optional scope.
+        /// IPackageManager is guaranteed to be PackageManager, but C# doesn't allow covariant attributes
         /// </summary>
-        /// <param name="name"></param>
-        /// <param name="id"></param>
-        /// <param name="version"></param>
-        /// <param name="source"></param>
-        /// <param name="manager"></param>
-        /// <param name="scope"></param>
-        public Package(string name, string id, string version, ManagerSource source, PackageManager manager, PackageScope scope = PackageScope.Local)
+        public IPackageManager Manager { get; }
+        public string NewVersionString { get; }
+        public virtual bool IsUpgradable { get; }
+
+        /// <summary>
+        /// Construct a package with a given name, id, version, source and manager, and an optional scope.
+        /// </summary>
+        public Package(
+            string name,
+            string id,
+            string version,
+            IManagerSource source,
+            IPackageManager manager,
+            OverridenInstallationOptions? options = null
+        )
+            : this(name, id, version, version, source, manager, options)
+        {
+            IsUpgradable = false;
+        }
+
+        /// <summary>
+        /// Creates an UpgradablePackage object representing a package that can be upgraded; given its name, id, installed version, new version, source and manager, and an optional scope.
+        /// </summary>
+        public Package(
+            string name,
+            string id,
+            string installed_version,
+            string new_version,
+            IManagerSource source,
+            IPackageManager manager,
+            OverridenInstallationOptions? options = null
+        )
         {
             Name = name;
             Id = id;
-            Version = version;
+            VersionString = installed_version;
+            NormalizedVersion = CoreTools.VersionStringToStruct(installed_version);
+            NewVersionString = new_version;
+            NormalizedNewVersion = CoreTools.VersionStringToStruct(new_version);
             Source = source;
             Manager = manager;
-            Scope = scope;
-            UniqueId = $"{Manager.Properties.Name}\\{Id}\\{Version}";
-            NewVersion = "";
-            VersionAsFloat = GetFloatVersion();
+
+            IsUpgradable = true;
             Tag = PackageTag.Default;
-            __hash = Manager.Name + "\\" + Source.Name + "\\" + Id;
+
+            AutomationName = CoreTools
+                .Translate("Package {name} from {manager}")
+                .Replace("{name}", name)
+                .Replace("{manager}", Source.AsString_DisplayName);
+
+            _overridenOptions = options ?? _overridenOptions;
+            _hash = CoreTools.HashStringAsLong(
+                $"{Manager.Name}\\{Source.AsString_DisplayName}\\{Id}"
+            );
+            _versionedHash = CoreTools.HashStringAsLong(
+                $"{Manager.Name}\\{Source.AsString_DisplayName}\\{Id}\\{installed_version}"
+            );
+            _ignoredId = IgnoredUpdatesDatabase.GetIgnoredIdForPackage(this);
+            _iconId = GenerateIconId(this);
         }
 
-        public string GetHash()
-        {
-            return __hash;
-        }
+        public long GetHash() => _hash;
 
+        public long GetVersionedHash() => _versionedHash;
+
+        public bool Equals(IPackage? other) => _versionedHash == other?.GetHash();
+
+        public override int GetHashCode() => (int)_versionedHash;
 
         /// <summary>
-        /// Internal method
+        /// Check whether two package instances represent the same package.
+        /// What is taken into account:
+        ///    - Manager and Source
+        ///    - Package Identifier
+        /// For more specific comparison use package.Equals(object? other)
         /// </summary>
-        /// <param name="obj"></param>
-        /// <returns></returns>
-        public override bool Equals(object? obj)
+        /// <param name="other">A package</param>
+        /// <returns>Whether the two instances refer to the same instance</returns>
+        public bool IsEquivalentTo(IPackage? other) => _hash == other?.GetHash();
+
+        public string GetIconId() => _iconId;
+
+        public virtual Uri GetIconUrl()
         {
-            if (!(obj is Package))
-                return false;
-            else
-                return (obj as Package)?.GetHash() == GetHash();
+            return GetIconUrlIfAny() ?? new Uri("ms-appx:///Assets/Images/package_color.png");
         }
 
-        /// <summary>
-        /// Load the package's normalized icon id,
-        /// </summary>
-        /// <returns>a string with the package's normalized icon id</returns>
-        public string GetIconId()
+        public virtual Uri? GetIconUrlIfAny()
         {
-            string iconId = Id.ToLower(); 
-            if (Manager.Name == "Winget")
-                iconId = string.Join('.', iconId.Split(".")[1..]);
-            else if (Manager.Name == "Chocolatey")
-                iconId = iconId.Replace(".install", "").Replace(".portable", "");
-            else if (Manager.Name == "Scoop")
-                iconId = iconId.Replace(".app", "");
-            return iconId;
+            long cacheKey = _versionedHash;
+            if (_cachedIconPaths.TryGetValue(cacheKey, out Uri? path))
+            {
+                return path;
+            }
+
+            if (
+                _failedIconLookups.TryGetValue(cacheKey, out long failedAt)
+                && Environment.TickCount64 - failedAt
+                    < (long)IconLookupRetryInterval.TotalMilliseconds
+            )
+            {
+                return null;
+            }
+
+            var CachedIcon = LoadIconUrlIfAny();
+            if (CachedIcon is null)
+            {
+                _failedIconLookups[cacheKey] = Environment.TickCount64;
+                return null;
+            }
+
+            _failedIconLookups.TryRemove(cacheKey, out _);
+            _cachedIconPaths[cacheKey] = CachedIcon;
+            return CachedIcon;
         }
 
-        /// <summary>
-        /// Get the package's icon url. If the package has no icon, a fallback image is returned.
-        /// </summary>
-        /// <returns>An always-valid URI object</returns>
-        public async Task<Uri> GetIconUrl()
+        private Uri? LoadIconUrlIfAny()
         {
             try
             {
-                string iconId = GetIconId();
-
-                CacheableIcon? icon = await Manager.GetPackageIconUrl(this);
-                string path = await IconCacheEngine.DownloadIconOrCache(icon, Manager.Name, Id);
-
-                Uri Icon;
-                if (path == "")
-                    Icon = new Uri("ms-appx:///Assets/Images/package_color.png");
-                else
-                    Icon = new Uri("file:///" + path);
-
-                Logger.Debug($"Icon for package {Id} was loaded from {Icon}");
-                return Icon;
+                CacheableIcon? icon = TaskRecycler<CacheableIcon?>.RunOrAttach(
+                    Manager.DetailsHelper.GetIcon,
+                    this
+                );
+                string? path = IconCacheEngine.GetCacheOrDownloadIcon(icon, Manager.Name, Id);
+                return path is null ? null : new Uri((path.StartsWith('/') ? "file://" : "file:///") + path);
             }
             catch (Exception ex)
             {
                 Logger.Error($"An error occurred while retrieving the icon for package {Id}");
                 Logger.Error(ex);
-                return new Uri("ms-appx:///Assets/Images/package_color.png");
+                return null;
             }
         }
 
-        public async Task<Uri[]> GetPackageScreenshots()
+        public virtual IReadOnlyList<Uri> GetScreenshots()
         {
-            return await Manager.GetPackageScreenshotsUrl(this);
+            return Manager.DetailsHelper.GetScreenshots(this);
         }
 
-        /// <summary>
-        /// Returns a float representation of the package's version for comparison purposes.
-        /// </summary>
-        /// <returns>A float value. Returns 0.0F if the version could not be parsed</returns>
-        public float GetFloatVersion()
-        {
-            string _ver = "";
-            bool _dotAdded = false;
-            foreach (char _char in Version)
-            {
-                if (char.IsDigit(_char))
-                    _ver += _char;
-                else if (_char == '.')
-                {
-                    if (!_dotAdded)
-                    {
-                        _ver += _char;
-                        _dotAdded = true;
-                    }
-                }
-            }
-            float res = 0.0F;
-            if (_ver != "" && _ver != ".")
-                try
-                {
-                    return float.Parse(_ver);
-                }
-                catch { }
-            return res;
-        }
-
-        /// <summary>
-        /// Adds the package to the ignored updates list. If no version is provided, all updates are ignored.
-        /// Calling this method will override older ignored updates.
-        /// </summary>
-        /// <param name="version"></param>
-        /// <returns></returns>
-        public async Task AddToIgnoredUpdatesAsync(string version = "*")
+        public virtual async Task AddToIgnoredUpdatesAsync(string version = "*")
         {
             try
             {
-                string IgnoredId = $"{Manager.Properties.Name.ToLower()}\\{Id}";
-                JsonObject? IgnoredUpdatesJson = JsonNode.Parse(await File.ReadAllTextAsync(CoreData.IgnoredUpdatesDatabaseFile)) as JsonObject;
-
-                if (IgnoredUpdatesJson == null)
-                    throw new Exception("The IgnoredUpdates database seems to be invalid!");
-
-                if (IgnoredUpdatesJson.ContainsKey(IgnoredId))
-                    IgnoredUpdatesJson.Remove(IgnoredId);
-                IgnoredUpdatesJson.Add(IgnoredId, version);
-                await File.WriteAllTextAsync(CoreData.IgnoredUpdatesDatabaseFile, IgnoredUpdatesJson.ToString());
-                GetInstalledPackage()?.SetTag(PackageTag.Pinned);
+                await Task.Run(() => IgnoredUpdatesDatabase.Add(_ignoredId, version));
+                foreach (var p in GetInstalledPackages())
+                    p.SetTag(PackageTag.Pinned);
             }
             catch (Exception ex)
             {
@@ -301,28 +238,13 @@ namespace UniGetUI.PackageEngine.PackageClasses
             }
         }
 
-        /// <summary>
-        /// Removes the package from the ignored updates list, either if it is ignored for all updates or for a specific version only.
-        /// </summary>
-        /// <returns></returns>
-        public async Task RemoveFromIgnoredUpdatesAsync()
+        public virtual async Task RemoveFromIgnoredUpdatesAsync()
         {
             try
             {
-
-                string IgnoredId = $"{Manager.Properties.Name.ToLower()}\\{Id}";
-                JsonObject? IgnoredUpdatesJson = JsonNode.Parse(await File.ReadAllTextAsync(CoreData.IgnoredUpdatesDatabaseFile)) as JsonObject;
-
-                if (IgnoredUpdatesJson == null)
-                    throw new Exception("The IgnoredUpdates database seems to be invalid!");
-
-                if (IgnoredUpdatesJson.ContainsKey(IgnoredId))
-                {
-                    IgnoredUpdatesJson.Remove(IgnoredId);
-                    await File.WriteAllTextAsync(CoreData.IgnoredUpdatesDatabaseFile, IgnoredUpdatesJson.ToString());
-                }
-
-                GetInstalledPackage()?.SetTag(PackageTag.Default);
+                await Task.Run(() => IgnoredUpdatesDatabase.Remove(_ignoredId));
+                foreach (var p in GetInstalledPackages())
+                    p.SetTag(PackageTag.Default);
             }
             catch (Exception ex)
             {
@@ -333,26 +255,17 @@ namespace UniGetUI.PackageEngine.PackageClasses
 
         /// <summary>
         /// Returns true if the package's updates are ignored. If the version parameter
-        /// is passed it will be checked if that version is ignored. Please note that if 
-        /// all updates are ignored, calling this method with a specific version will 
-        /// still return true, although the passed version is not explicitly ignored. 
+        /// is passed it will be checked if that version is ignored. Please note that if
+        /// all updates are ignored, calling this method with a specific version will
+        /// still return true, although the passed version is not explicitly ignored.
         /// </summary>
-        /// <param name="Version"></param>
-        /// <returns></returns>
-        public async Task<bool> HasUpdatesIgnoredAsync(string Version = "*")
+        public virtual async Task<bool> HasUpdatesIgnoredAsync(string version = "*")
         {
             try
             {
-                string IgnoredId = $"{Manager.Properties.Name.ToLower()}\\{Id}";
-                JsonObject? IgnoredUpdatesJson = JsonNode.Parse(await File.ReadAllTextAsync(CoreData.IgnoredUpdatesDatabaseFile)) as JsonObject;
-
-                if (IgnoredUpdatesJson == null)
-                    throw new Exception("The IgnoredUpdates database seems to be invalid!");
-
-                if (IgnoredUpdatesJson.ContainsKey(IgnoredId) && (IgnoredUpdatesJson[IgnoredId]?.ToString() == "*" || IgnoredUpdatesJson[IgnoredId]?.ToString() == Version))
-                    return true;
-                else
-                    return false;
+                return await Task.Run(() =>
+                    IgnoredUpdatesDatabase.HasUpdatesIgnored(_ignoredId, version)
+                );
             }
             catch (Exception ex)
             {
@@ -360,29 +273,19 @@ namespace UniGetUI.PackageEngine.PackageClasses
                 Logger.Error(ex);
                 return false;
             }
-
         }
 
         /// <summary>
-        /// Returns (as a string) the version for which a package has been ignored. When no versions 
+        /// Returns (as a string) the version for which a package has been ignored. When no versions
         /// are ignored, an empty string will be returned; and when all versions are ignored an asterisk
         /// will be returned.
         /// </summary>
-        /// <returns></returns>
-        public async Task<string> GetIgnoredUpdatesVersionAsync()
+        public virtual async Task<string> GetIgnoredUpdatesVersionAsync()
         {
             try
             {
-                string IgnoredId = $"{Manager.Properties.Name.ToLower()}\\{Id}";
-                JsonObject? IgnoredUpdatesJson = JsonNode.Parse(await File.ReadAllTextAsync(CoreData.IgnoredUpdatesDatabaseFile)) as JsonObject;
-
-                if (IgnoredUpdatesJson == null)
-                    throw new Exception("The IgnoredUpdates database seems to be invalid!");
-                
-                if (IgnoredUpdatesJson.ContainsKey(IgnoredId))
-                    return IgnoredUpdatesJson[IgnoredId]?.ToString() ?? "";
-                else
-                    return "";
+                return await Task.Run(() => IgnoredUpdatesDatabase.GetIgnoredVersion(_ignoredId))
+                    ?? "";
             }
             catch (Exception ex)
             {
@@ -392,58 +295,205 @@ namespace UniGetUI.PackageEngine.PackageClasses
             }
         }
 
-        /// <summary>
-        /// Internal method to raise the PropertyChanged event.
-        /// </summary>
-        /// <param name="name"></param>
         protected void OnPropertyChanged([CallerMemberName] string? name = null)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
         }
 
-        /// <summary>
-        /// Returns the corresponding installed Package object. Will return null if not applicable
-        /// </summary>
-        /// <returns>a Package object if found, null if not</returns>
-        public Package? GetInstalledPackage()
-        {
-            return PackageFactory.FindPackageOnInstalledOrNull(this);
-            
-        }
+        public IPackage? GetAvailablePackage() =>
+            DiscoverablePackagesLoader.Instance.GetEquivalentPackage(this);
 
-        /// <summary>
-        /// Returns the corresponding available Package object. Will return null if not applicable
-        /// </summary>
-        /// <returns>a Package object if found, null if not</returns>
-        public Package? GetAvailablePackage()
-        {
-            return PackageFactory.FindPackageOnAvailableOrNull(this);
-        }
+        public IPackage? GetUpgradablePackage() =>
+            UpgradablePackagesLoader.Instance.GetEquivalentPackage(this);
 
-        /// <summary>
-        /// Returns the corresponding upgradable Package object. Will return null if not applicable
-        /// </summary>
-        /// <returns>a Package object if found, null if not</returns>
-        public Package? GetUpgradablePackage()
-        {
-            return PackageFactory.FindPackageOnUpdatesOrNull(this);
-        }
+        public IReadOnlyList<IPackage> GetInstalledPackages() =>
+            InstalledPackagesLoader.Instance.GetEquivalentPackages(this);
 
-        /// <summary>
-        /// Sets the package tag. You may as well use the Tag property.
-        /// This function is used for compatibility with the ? operator
-        /// </summary>
-        /// <param name="tag"></param>
-        public void SetTag(PackageTag tag)
+        public virtual void SetTag(PackageTag tag)
         {
             Tag = tag;
         }
 
-        public bool NewerVersionIsInstalled()
+        public virtual bool NewerVersionIsInstalled()
         {
-            if(!IsUpgradable) return false;
-            return PackageFactory.NewerVersionIsInstalled(this);
+            foreach (var p in GetInstalledPackages())
+            {
+                if (Manager.CompareVersions(p.VersionString, this.NewVersionString) is not { } comparison)
+                {
+                    continue;
+                }
+
+                if (comparison >= 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
+        private string ResolveInstallerVersion()
+        {
+            string listedVersion = HasConcreteVersion ? VersionString : "";
+            string resolvedVersion =
+                Details.Version is { } reported && reported.Any(char.IsDigit) ? reported : "";
+
+            if (Manager.InstallerUrlFollowsPackageVersion)
+                return listedVersion.Length > 0 ? listedVersion : resolvedVersion;
+
+            if (resolvedVersion.Length > 0)
+                return resolvedVersion;
+
+            if (IsUpgradable)
+                return NewVersionString;
+
+            if (GetUpgradablePackage() is { } upgradable)
+                return upgradable.NewVersionString;
+
+            if (GetAvailablePackage() is { } available)
+                return available.VersionString;
+
+            return listedVersion;
+        }
+
+        public async Task<string?> GetInstallerFileName()
+        {
+            var scheme = InstallerFileNaming.ResolveScheme();
+            bool versioned = scheme is not InstallerNameScheme.PublisherName;
+
+            if (Manager.Name.StartsWith("PowerShell") || Manager.Name.StartsWith(".NET"))
+            {
+                if (versioned && !HasConcreteVersion && !Details.IsPopulated)
+                    await Details.Load();
+
+                return InstallerFileNaming.Build(
+                    $"{Id}.nupkg",
+                    Name,
+                    Id,
+                    versioned ? ResolveInstallerVersion() : "",
+                    "nupkg",
+                    scheme
+                );
+            }
+            else
+            {
+                if (!Details.IsPopulated)
+                    await Details.Load();
+                if (Details.InstallerUrl is null)
+                    return null;
+                return InstallerFileNaming.Build(
+                    await CoreTools.GetFileNameAsync(Details.InstallerUrl),
+                    Name,
+                    Id,
+                    versioned ? ResolveInstallerVersion() : "",
+                    Details.InstallerType,
+                    scheme
+                );
+            }
+        }
+
+        // 1-based position of the most significant version component that changed
+        // (1=Major, 2=Minor, 3=Patch, 4=Remainder), or 0 if identical/unparseable.
+        private int HighestChangedVersionComponent()
+        {
+            if (NormalizedVersion == CoreTools.Version.Null || NormalizedNewVersion == CoreTools.Version.Null)
+                return 0;
+            return NormalizedVersion.FirstDifferingComponent(NormalizedNewVersion);
+        }
+
+        public virtual bool IsUpdateMinor(int level = InstallOptions.DefaultSkipMinorLevel)
+        {
+            if (!IsUpgradable)
+                return false;
+
+            int changed = HighestChangedVersionComponent();
+            return changed >= level;
+        }
+
+        public virtual Task<InstallOptions> GetInstallOptions() =>
+            InstallOptionsFactory.LoadApplicableAsync(this);
+
+        public virtual async Task<SerializablePackage> AsSerializableAsync()
+        {
+            return new SerializablePackage
+            {
+                Id = Id,
+                Name = Name,
+                Version = VersionString,
+                Source = Source.Name,
+                ManagerName = Manager.Id,
+                InstallationOptions = await InstallOptionsFactory.LoadForPackageAsync(this),
+                Updates = new SerializableUpdatesOptions
+                {
+                    IgnoredVersion = await GetIgnoredUpdatesVersionAsync(),
+                    UpdatesIgnored = await HasUpdatesIgnoredAsync(),
+                },
+            };
+        }
+
+        public SerializableIncompatiblePackage AsSerializable_Incompatible()
+        {
+            return new SerializableIncompatiblePackage
+            {
+                Id = Id,
+                Name = Name,
+                Version = VersionString,
+                Source = Source.Name,
+            };
+        }
+
+        public static void ResetIconCache()
+        {
+            _cachedIconPaths.Clear();
+            _failedIconLookups.Clear();
+        }
+
+        private static string GenerateIconId(Package p)
+        {
+            string iconId;
+            try
+            {
+                iconId = p.Manager.Name switch
+                {
+                    "Winget" => p.Source.Name switch
+                    {
+                        "Steam" => p
+                            .Id.ToLower()
+                            .Split("\\")[^1]
+                            .Replace("steam app ", "steam-")
+                            .Trim(),
+                        "Local PC" => p.Id.Split("\\")[^1],
+                        // If the first underscore is before the period, this ID has no publisher
+                        "Microsoft Store" => p.Id.IndexOf('_') < p.Id.IndexOf('.')
+                            ?
+                            // no publisher: remove `MSIX\`, then the standard ending _version_arch__{random p.Id}
+                            string.Join('_', p.Id.Split("\\")[1].Split("_")[0..^4])
+                            :
+                            // remove the publisher (before the first .), then the standard _version_arch__{random p.Id}
+                            string.Join(
+                                '_',
+                                string.Join('.', p.Id.Split(".")[1..]).Split("_")[0..^4]
+                            ),
+                        _ => string.Join('.', p.Id.Split(".")[1..]),
+                    },
+                    "Scoop" => p.Id.Replace(".app", ""),
+                    "Chocolatey" => p.Id.Replace(".install", "").Replace(".portable", ""),
+                    "vcpkg" => p.Id.Split(":")[0].Split("[")[0],
+                    _ => p.Id,
+                };
+            }
+            catch
+            {
+                iconId = p.Id;
+            }
+
+            return iconId
+                .ToLower()
+                .Replace('_', '-')
+                .Replace('.', '-')
+                .Replace(' ', '-')
+                .Replace('/', '-')
+                .Replace(',', '-');
+        }
     }
 }

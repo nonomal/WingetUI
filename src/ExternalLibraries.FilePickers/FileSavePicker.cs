@@ -1,5 +1,3 @@
-﻿using System;
-using System.Collections.Generic;
 using ExternalLibraries.Pickers.Classes;
 using ExternalLibraries.Pickers.Enums;
 
@@ -32,6 +30,7 @@ public class FileSavePicker
     /// <returns>Path to selected file or empty string.</returns>
     public string Show(List<string>? typeFilters = null, string defaultName = "")
     {
-        return Helper.ShowSave(_windowHandle, FOS.FOS_FORCEFILESYSTEM, typeFilters, defaultName);
+        FOS options = FOS.FOS_FORCEFILESYSTEM | FOS.FOS_OVERWRITEPROMPT;
+        return Helper.ShowSave(_windowHandle, options, typeFilters, defaultName);
     }
 }

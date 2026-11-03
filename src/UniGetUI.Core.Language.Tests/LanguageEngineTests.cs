@@ -1,4 +1,5 @@
-﻿using UniGetUI.Core.Data;
+using System.Globalization;
+using UniGetUI.Core.Data;
 using UniGetUI.PackageEngine.Enums;
 
 namespace UniGetUI.Core.Language.Tests
@@ -6,75 +7,144 @@ namespace UniGetUI.Core.Language.Tests
     public class LanguageEngineTests
     {
         [Theory]
-        [InlineData("ca", "Fes una còpia de seguretat dels paquets instal·lats")]
-        [InlineData("es", "Respaldar paquetes instalados")]
+        [InlineData("ca", "Subsistema Android")]
+        [InlineData("es", "Subsistema de Android")]
+        [InlineData("uk", "Підсистема Android")]
         public void TestLoadingLanguage(string language, string translation)
         {
-            var engine = new LanguageEngine();
+            LanguageEngine engine = new();
 
             engine.LoadLanguage(language);
-            Assert.Equal(translation, engine.Translate("Backup installed packages"));
+            Assert.Equal(translation, engine.Translate("Android Subsystem"));
         }
 
         [Fact]
         public void TestLoadingLanguageForNonExistentKey()
         {
             //arrange
-            var engine = new LanguageEngine();
+            LanguageEngine engine = new();
             engine.LoadLanguage("es");
             //act
-            var NONEXISTENT_KEY = "This is a nonexistent key thay should be returned as-is";
+            string NONEXISTENT_KEY = "This is a nonexistent key thay should be returned as-is";
             //assert
             Assert.Equal(NONEXISTENT_KEY, engine.Translate(NONEXISTENT_KEY));
         }
 
         [Theory]
-        [InlineData("en", "UniGetUI Log", "UniGetUI (formerly WingetUI)")]
-        [InlineData("ca", "Registre del UniGetUI", "UniGetUI (abans WingetUI)")]
-        public void TestUniGetUIRefactoring(string language, string uniGetUILogTranslation, string uniGetUITranslation)
+        [InlineData("en", "UniGetUI Log", "UniGetUI")]
+        [InlineData("ca", "Registre de l'UniGetUI", "UniGetUI")]
+        public void TestUniGetUIRefactoring(
+            string language,
+            string uniGetUILogTranslation,
+            string uniGetUITranslation
+        )
         {
-            var engine = new LanguageEngine();
+            LanguageEngine engine = new();
 
             engine.LoadLanguage(language);
-            Assert.Equal(uniGetUILogTranslation, engine.Translate("WingetUI Log"));
-            Assert.Equal(uniGetUITranslation, engine.Translate("WingetUI"));
+            Assert.Equal(uniGetUILogTranslation, engine.Translate("UniGetUI Log"));
+            Assert.Equal(uniGetUITranslation, engine.Translate("UniGetUI"));
         }
-
 
         [Fact]
         public void LocalFallbackTest()
         {
-            var engine = new LanguageEngine();
+            LanguageEngine engine = new();
             engine.LoadLanguage("random-nonexistent-language");
-            Assert.Equal("en", engine.Translate("locale"));
+            Assert.Equal("en", engine.Locale);
         }
 
         [Fact]
-        public void TestStaticallyLoadedLanguages()
+        public void TestLoadingUkrainianSpecificTranslation()
         {
-            var engine = new LanguageEngine();
-            engine.LoadLanguage("ca");
-            engine.LoadStaticTranslation();
-            Assert.Equal("Usuari | Local", CommonTranslations.ScopeNames[PackageScope.Local]);
-            Assert.Equal("Màquina | Global", CommonTranslations.ScopeNames[PackageScope.Global]);
+            LanguageEngine engine = new();
 
-            Assert.Equal(PackageScope.Global, CommonTranslations.InvertedScopeNames["Màquina | Global"]);
-            Assert.Equal(PackageScope.Local, CommonTranslations.InvertedScopeNames["Usuari | Local"]);
+            engine.LoadLanguage("uk");
+            Assert.Equal("Підсистема Android", engine.Translate("Android Subsystem"));
         }
 
+        [Fact]
+        public void TestLoadingLegacyUkrainianAlias()
+        {
+            LanguageEngine engine = new();
+
+            engine.LoadLanguage("ua");
+            Assert.Equal("uk", engine.Locale);
+        }
+
+        [Theory]
+        [InlineData("en")]
+        [InlineData("es")]
+        [InlineData("uk")]
+        public void TestTranslatingWithParametersInInvariantGlobalizationMode(string language)
+        {
+            Assert.Equal(CultureInfo.InvariantCulture, CultureInfo.CurrentCulture);
+
+            LanguageEngine engine = new();
+            engine.LoadLanguage(language);
+
+            Assert.Equal(
+                "3 packages were found, 1234.5 MB",
+                engine.Translate(
+                    "{count} packages were found, {size} MB",
+                    new Dictionary<string, object?> { { "count", 3 }, { "size", 1234.5 } }
+                )
+            );
+        }
+
+        [Fact]
+        public void TestLoadingLanguageIgnoresCachedOverrides()
+        {
+            string cachedLangFile = Path.Join(CoreData.UniGetUICacheDirectory_Lang, "lang_en.json");
+            string? previousContents = File.Exists(cachedLangFile)
+                ? File.ReadAllText(cachedLangFile)
+                : null;
+
+            Directory.CreateDirectory(CoreData.UniGetUICacheDirectory_Lang);
+            File.WriteAllText(
+                cachedLangFile,
+                """
+                {
+                                    "Starting operation...": "Cached override should be ignored"
+                }
+                """
+            );
+
+            try
+            {
+                LanguageEngine engine = new();
+
+                Dictionary<string, string> langFile = engine.LoadLanguageFile("en");
+                Assert.Equal("Starting operation...", langFile["Starting operation..."]);
+            }
+            finally
+            {
+                if (previousContents is not null)
+                {
+                    File.WriteAllText(cachedLangFile, previousContents);
+                }
+                else if (File.Exists(cachedLangFile))
+                {
+                    File.Delete(cachedLangFile);
+                }
+            }
+        }
+
+        /*
         [Fact]
         public async Task TestDownloadUpdatedTranslationsAsync()
         {
-            var expected_file = Path.Join(CoreData.UniGetUICacheDirectory_Lang, "lang_ca.json");
+            string expected_file = Path.Join(CoreData.UniGetUICacheDirectory_Lang, "lang_ca.json");
             if (File.Exists(expected_file))
                 File.Delete(expected_file);
 
-            var engine = new LanguageEngine();
+            LanguageEngine engine = new();
             engine.LoadLanguage("ca");
             await engine.DownloadUpdatedLanguageFile("ca");
 
             Assert.True(File.Exists(expected_file), "The updated file was not created");
             File.Delete(expected_file);
         }
+        */
     }
 }

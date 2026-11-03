@@ -3,4 +3,10 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+    ignore:
+      - dependency-name: "github/gh-aw-actions/*"
+    groups:
+      actions-deps:
+        patterns:
+          - "*"
